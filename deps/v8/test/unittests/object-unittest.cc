@@ -19,10 +19,11 @@ namespace {
 
 bool IsInStringInstanceTypeList(InstanceType instance_type) {
   switch (instance_type) {
-#define TEST_INSTANCE_TYPE(type, ...) \
-  case InstanceType::type:            \
-    STATIC_ASSERT(InstanceType::type < InstanceType::FIRST_NONSTRING_TYPE);
-
+#define ASSERT_INSTANCE_TYPE(type, ...) \
+  STATIC_ASSERT(InstanceType::type < InstanceType::FIRST_NONSTRING_TYPE);
+    STRING_TYPE_LIST(ASSERT_INSTANCE_TYPE)
+#undef ASSERT_INSTANCE_TYPE
+#define TEST_INSTANCE_TYPE(type, ...) case InstanceType::type:
     STRING_TYPE_LIST(TEST_INSTANCE_TYPE)
 #undef TEST_INSTANCE_TYPE
     return true;
@@ -61,7 +62,7 @@ TEST(Object, InstanceTypeListOrder) {
   current_type = InstanceType::type;                                       \
   current = static_cast<int>(current_type);                                \
   if (current > static_cast<int>(LAST_NAME_TYPE)) {                        \
-    EXPECT_EQ(last + 1, current);                                          \
+    EXPECT_LE(last + 1, current);                                          \
   }                                                                        \
   EXPECT_LT(last, current) << " INSTANCE_TYPE_LIST is not ordered: "       \
                            << "last = " << static_cast<InstanceType>(last) \
@@ -73,7 +74,7 @@ TEST(Object, InstanceTypeListOrder) {
 }
 
 TEST(Object, StructListOrder) {
-  int current = static_cast<int>(InstanceType::ACCESSOR_INFO_TYPE);
+  int current = static_cast<int>(InstanceType::ACCESS_CHECK_INFO_TYPE);
   int last = current - 1;
   ASSERT_LT(0, last);
   InstanceType current_type = static_cast<InstanceType>(current);

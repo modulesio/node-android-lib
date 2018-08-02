@@ -4,7 +4,7 @@ const common = require('../common.js');
 
 const bench = common.createBenchmark(main, {
   method: ['normal', 'destructureObject'],
-  millions: [100]
+  n: [1e8]
 });
 
 function runNormal(n) {
@@ -18,7 +18,7 @@ function runNormal(n) {
     const r = o.r || 2;
     /* eslint-enable no-unused-vars */
   }
-  bench.end(n / 1e6);
+  bench.end(n);
 }
 
 function runDestructured(n) {
@@ -30,12 +30,10 @@ function runDestructured(n) {
     const { x, y, r = 2 } = o;
     /* eslint-enable no-unused-vars */
   }
-  bench.end(n / 1e6);
+  bench.end(n);
 }
 
-function main({ millions, method }) {
-  const n = millions * 1e6;
-
+function main({ n, method }) {
   switch (method) {
     case '':
       // Empty string falls through to next line as default, mostly for tests.
@@ -46,6 +44,6 @@ function main({ millions, method }) {
       runDestructured(n);
       break;
     default:
-      throw new Error('Unexpected method');
+      throw new Error(`Unexpected method "${method}"`);
   }
 }

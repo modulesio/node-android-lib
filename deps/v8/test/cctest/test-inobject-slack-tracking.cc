@@ -622,6 +622,12 @@ static void TestSubclassChain(const std::vector<int>& hierarchy_desc) {
   TestClassHierarchy(hierarchy_desc, static_cast<int>(hierarchy_desc.size()));
 }
 
+TEST(Subclasses) {
+  std::vector<int> hierarchy_desc;
+  hierarchy_desc.push_back(50);
+  hierarchy_desc.push_back(128);
+  TestSubclassChain(hierarchy_desc);
+}
 
 TEST(LongSubclassChain1) {
   std::vector<int> hierarchy_desc;
@@ -1136,6 +1142,8 @@ TEST(SubclassArrayBuiltinNoInlineNew) {
 TEST(SubclassTypedArrayBuiltin) {
   // Avoid eventual completion of in-object slack tracking.
   FLAG_always_opt = false;
+  // Make BigInt64Array/BigUint64Array available for testing.
+  FLAG_harmony_bigint = true;
   CcTest::InitializeVM();
   v8::HandleScope scope(CcTest::isolate());
 

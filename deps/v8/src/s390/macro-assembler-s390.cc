@@ -15,6 +15,7 @@
 #include "src/debug/debug.h"
 #include "src/external-reference-table.h"
 #include "src/frames-inl.h"
+#include "src/instruction-stream.h"
 #include "src/register-configuration.h"
 #include "src/runtime/runtime.h"
 
@@ -160,7 +161,7 @@ void TurboAssembler::Call(Register target) {
 }
 
 void MacroAssembler::CallJSEntry(Register target) {
-  DCHECK(target == ip);
+  DCHECK(target == r4);
   Call(target);
 }
 
@@ -443,7 +444,7 @@ void MacroAssembler::RecordWrite(Register object, Register address,
   DCHECK(object != value);
   if (emit_debug_code()) {
     CmpP(value, MemOperand(address));
-    Check(eq, kWrongAddressOrValuePassedToRecordWrite);
+    Check(eq, AbortReason::kWrongAddressOrValuePassedToRecordWrite);
   }
 
   if (remembered_set_action == OMIT_REMEMBERED_SET &&
@@ -1049,7 +1050,7 @@ void MacroAssembler::LeaveExitFrame(bool save_doubles, Register argument_count,
   // Clear top frame.
   mov(ip, Operand(ExternalReference(IsolateAddressId::kCEntryFPAddress,
                                     isolate())));
-  StoreP(MemOperand(ip), Operand(0, kRelocInfo_NONEPTR), r0);
+  StoreP(MemOperand(ip), Operand(0, RelocInfo::NONE), r0);
 
   // Restore current context from top and clear it in debug mode.
   mov(ip,
@@ -1057,9 +1058,10 @@ void MacroAssembler::LeaveExitFrame(bool save_doubles, Register argument_count,
   LoadP(cp, MemOperand(ip));
 
 #ifdef DEBUG
+  mov(r1, Operand(Context::kInvalidContext));
   mov(ip,
       Operand(ExternalReference(IsolateAddressId::kContextAddress, isolate())));
-  StoreP(MemOperand(ip), Operand(0, kRelocInfo_NONEPTR), r0);
+  StoreP(r1, MemOperand(ip));
 #endif
 
   // Tear down the exit frame, pop the arguments, and return.
@@ -1115,7 +1117,7 @@ void TurboAssembler::PrepareForTailCall(const ParameterCount& callee_args_count,
 
   if (FLAG_debug_code) {
     CmpLogicalP(src_reg, dst_reg);
-    Check(lt, kStackAccessBelowStackPointer);
+    Check(lt, AbortReason::kStackAccessBelowStackPointer);
   }
 
   // Restore caller's frame pointer and return address now as they will be
@@ -1215,12 +1217,13 @@ void MacroAssembler::CheckDebugHook(Register fun, Register new_target,
                                     const ParameterCount& expected,
                                     const ParameterCount& actual) {
   Label skip_hook;
+
   ExternalReference debug_hook_avtive =
       ExternalReference::debug_hook_on_function_call_address(isolate());
   mov(r6, Operand(debug_hook_avtive));
-  LoadB(r6, MemOperand(r6));
-  CmpP(r6, Operand::Zero());
-  beq(&skip_hook);
+  tm(MemOperand(r6), Operand::Zero());
+  bne(&skip_hook);
+
   {
     FrameScope frame(this,
                      has_frame() ? StackFrame::NONE : StackFrame::INTERNAL);
@@ -1278,7 +1281,7 @@ void MacroAssembler::InvokeFunctionCode(Register function, Register new_target,
     // We call indirectly through the code field in the function to
     // allow recompilation to take effect without changing any of the
     // call sites.
-    Register code = ip;
+    Register code = kJavaScriptCallCodeStartRegister;
     LoadP(code, FieldMemOperand(function, JSFunction::kCodeOffset));
     AddP(code, code, Operand(Code::kHeaderSize - kHeapObjectTag));
     if (flag == CALL_FUNCTION) {
@@ -1331,14 +1334,6 @@ void MacroAssembler::InvokeFunction(Register function,
   InvokeFunctionCode(r3, no_reg, expected, actual, flag);
 }
 
-void MacroAssembler::InvokeFunction(Handle<JSFunction> function,
-                                    const ParameterCount& expected,
-                                    const ParameterCount& actual,
-                                    InvokeFlag flag) {
-  Move(r3, function);
-  InvokeFunction(r3, expected, actual, flag);
-}
-
 void MacroAssembler::MaybeDropFrames() {
   // Check whether we need to drop frames to restart a function on the stack.
   ExternalReference restart_fp =
@@ -1352,7 +1347,7 @@ void MacroAssembler::MaybeDropFrames() {
 
 void MacroAssembler::PushStackHandler() {
   // Adjust this code if not the case.
-  STATIC_ASSERT(StackHandlerConstants::kSize == 1 * kPointerSize);
+  STATIC_ASSERT(StackHandlerConstants::kSize == 2 * kPointerSize);
   STATIC_ASSERT(StackHandlerConstants::kNextOffset == 0 * kPointerSize);
 
   // Link the current handler as the next handler.
@@ -1362,6 +1357,10 @@ void MacroAssembler::PushStackHandler() {
   // Buy the full stack frame for 5 slots.
   lay(sp, MemOperand(sp, -StackHandlerConstants::kSize));
 
+  // Store padding.
+  mov(r0, Operand(Smi::kZero));
+  StoreP(r0, MemOperand(sp));  // Padding.
+
   // Copy the old handler into the next handler slot.
   mvc(MemOperand(sp, StackHandlerConstants::kNextOffset), MemOperand(r7),
       kPointerSize);
@@ -1370,15 +1369,16 @@ void MacroAssembler::PushStackHandler() {
 }
 
 void MacroAssembler::PopStackHandler() {
-  STATIC_ASSERT(StackHandlerConstants::kSize == 1 * kPointerSize);
+  STATIC_ASSERT(StackHandlerConstants::kSize == 2 * kPointerSize);
   STATIC_ASSERT(StackHandlerConstants::kNextOffset == 0);
 
   // Pop the Next Handler into r3 and store it into Handler Address reference.
   Pop(r3);
   mov(ip,
       Operand(ExternalReference(IsolateAddressId::kHandlerAddress, isolate())));
-
   StoreP(r3, MemOperand(ip));
+
+  Drop(1);  // Drop padding.
 }
 
 void MacroAssembler::CompareObjectType(Register object, Register map,
@@ -1392,7 +1392,7 @@ void MacroAssembler::CompareObjectType(Register object, Register map,
 void MacroAssembler::CompareInstanceType(Register map, Register type_reg,
                                          InstanceType type) {
   STATIC_ASSERT(Map::kInstanceTypeOffset < 4096);
-  STATIC_ASSERT(LAST_TYPE <= 0xffff);
+  STATIC_ASSERT(LAST_TYPE <= 0xFFFF);
   LoadHalfWordP(type_reg, FieldMemOperand(map, Map::kInstanceTypeOffset));
   CmpP(type_reg, Operand(type));
 }
@@ -1523,6 +1523,20 @@ void MacroAssembler::JumpToExternalReference(const ExternalReference& builtin,
   Jump(stub.GetCode(), RelocInfo::CODE_TARGET);
 }
 
+void MacroAssembler::JumpToInstructionStream(Address entry) {
+  mov(kOffHeapTrampolineRegister,
+      Operand(reinterpret_cast<intptr_t>(entry), RelocInfo::OFF_HEAP_TARGET));
+  Jump(kOffHeapTrampolineRegister);
+}
+
+void MacroAssembler::LoadWeakValue(Register out, Register in,
+                                   Label* target_if_cleared) {
+  CmpP(in, Operand(kClearedWeakHeapObject));
+  beq(target_if_cleared);
+
+  AndP(out, in, Operand(~kWeakHeapObjectMask));
+}
+
 void MacroAssembler::IncrementCounter(StatsCounter* counter, int value,
                                       Register scratch1, Register scratch2) {
   DCHECK(value > 0 && is_int8(value));
@@ -1547,12 +1561,11 @@ void MacroAssembler::DecrementCounter(StatsCounter* counter, int value,
   }
 }
 
-void TurboAssembler::Assert(Condition cond, BailoutReason reason,
-                            CRegister cr) {
+void TurboAssembler::Assert(Condition cond, AbortReason reason, CRegister cr) {
   if (emit_debug_code()) Check(cond, reason, cr);
 }
 
-void TurboAssembler::Check(Condition cond, BailoutReason reason, CRegister cr) {
+void TurboAssembler::Check(Condition cond, AbortReason reason, CRegister cr) {
   Label L;
   b(cond, &L);
   Abort(reason);
@@ -1560,11 +1573,11 @@ void TurboAssembler::Check(Condition cond, BailoutReason reason, CRegister cr) {
   bind(&L);
 }
 
-void TurboAssembler::Abort(BailoutReason reason) {
+void TurboAssembler::Abort(AbortReason reason) {
   Label abort_start;
   bind(&abort_start);
 #ifdef DEBUG
-  const char* msg = GetBailoutReason(reason);
+  const char* msg = GetAbortReason(reason);
   if (msg != nullptr) {
     RecordComment("Abort message: ");
     RecordComment(msg);
@@ -1617,7 +1630,7 @@ void MacroAssembler::AssertNotSmi(Register object) {
   if (emit_debug_code()) {
     STATIC_ASSERT(kSmiTag == 0);
     TestIfSmi(object);
-    Check(ne, kOperandIsASmi, cr0);
+    Check(ne, AbortReason::kOperandIsASmi, cr0);
   }
 }
 
@@ -1625,7 +1638,7 @@ void MacroAssembler::AssertSmi(Register object) {
   if (emit_debug_code()) {
     STATIC_ASSERT(kSmiTag == 0);
     TestIfSmi(object);
-    Check(eq, kOperandIsNotSmi, cr0);
+    Check(eq, AbortReason::kOperandIsNotASmi, cr0);
   }
 }
 
@@ -1633,11 +1646,23 @@ void MacroAssembler::AssertFixedArray(Register object) {
   if (emit_debug_code()) {
     STATIC_ASSERT(kSmiTag == 0);
     TestIfSmi(object);
-    Check(ne, kOperandIsASmiAndNotAFixedArray, cr0);
+    Check(ne, AbortReason::kOperandIsASmiAndNotAFixedArray, cr0);
     push(object);
     CompareObjectType(object, object, object, FIXED_ARRAY_TYPE);
     pop(object);
-    Check(eq, kOperandIsNotAFixedArray);
+    Check(eq, AbortReason::kOperandIsNotAFixedArray);
+  }
+}
+
+void MacroAssembler::AssertConstructor(Register object, Register scratch) {
+  if (emit_debug_code()) {
+    STATIC_ASSERT(kSmiTag == 0);
+    TestIfSmi(object);
+    Check(ne, AbortReason::kOperandIsASmiAndNotAConstructor);
+    LoadP(scratch, FieldMemOperand(object, HeapObject::kMapOffset));
+    tm(FieldMemOperand(scratch, Map::kBitFieldOffset),
+       Operand(Map::IsConstructorBit::kMask));
+    Check(ne, AbortReason::kOperandIsNotAConstructor);
   }
 }
 
@@ -1645,11 +1670,11 @@ void MacroAssembler::AssertFunction(Register object) {
   if (emit_debug_code()) {
     STATIC_ASSERT(kSmiTag == 0);
     TestIfSmi(object);
-    Check(ne, kOperandIsASmiAndNotAFunction, cr0);
+    Check(ne, AbortReason::kOperandIsASmiAndNotAFunction, cr0);
     push(object);
     CompareObjectType(object, object, object, JS_FUNCTION_TYPE);
     pop(object);
-    Check(eq, kOperandIsNotAFunction);
+    Check(eq, AbortReason::kOperandIsNotAFunction);
   }
 }
 
@@ -1657,18 +1682,18 @@ void MacroAssembler::AssertBoundFunction(Register object) {
   if (emit_debug_code()) {
     STATIC_ASSERT(kSmiTag == 0);
     TestIfSmi(object);
-    Check(ne, kOperandIsASmiAndNotABoundFunction, cr0);
+    Check(ne, AbortReason::kOperandIsASmiAndNotABoundFunction, cr0);
     push(object);
     CompareObjectType(object, object, object, JS_BOUND_FUNCTION_TYPE);
     pop(object);
-    Check(eq, kOperandIsNotABoundFunction);
+    Check(eq, AbortReason::kOperandIsNotABoundFunction);
   }
 }
 
 void MacroAssembler::AssertGeneratorObject(Register object) {
   if (!emit_debug_code()) return;
   TestIfSmi(object);
-  Check(ne, kOperandIsASmiAndNotAGeneratorObject, cr0);
+  Check(ne, AbortReason::kOperandIsASmiAndNotAGeneratorObject, cr0);
 
   // Load map
   Register map = object;
@@ -1687,7 +1712,7 @@ void MacroAssembler::AssertGeneratorObject(Register object) {
   bind(&do_check);
   // Restore generator object to register and perform assertion
   pop(object);
-  Check(eq, kOperandIsNotAGeneratorObject);
+  Check(eq, AbortReason::kOperandIsNotAGeneratorObject);
 }
 
 void MacroAssembler::AssertUndefinedOrAllocationSite(Register object,
@@ -1699,7 +1724,7 @@ void MacroAssembler::AssertUndefinedOrAllocationSite(Register object,
     beq(&done_checking, Label::kNear);
     LoadP(scratch, FieldMemOperand(object, HeapObject::kMapOffset));
     CompareRoot(scratch, Heap::kAllocationSiteMapRootIndex);
-    Assert(eq, kExpectedUndefinedOrCell);
+    Assert(eq, AbortReason::kExpectedUndefinedOrCell);
     bind(&done_checking);
   }
 }
@@ -1942,7 +1967,7 @@ void TurboAssembler::mov(Register dst, const Operand& src) {
     value = src.immediate();
   }
 
-  if (src.rmode() != kRelocInfo_NONEPTR) {
+  if (src.rmode() != RelocInfo::NONE) {
     // some form of relocation needed
     RecordRelocInfo(src.rmode(), value);
   }
@@ -3161,7 +3186,7 @@ void TurboAssembler::CmpP(Register src1, Register src2) {
 // Compare 32-bit Register vs Immediate
 // This helper will set up proper relocation entries if required.
 void TurboAssembler::Cmp32(Register dst, const Operand& opnd) {
-  if (opnd.rmode() == kRelocInfo_NONEPTR) {
+  if (opnd.rmode() == RelocInfo::NONE) {
     intptr_t value = opnd.immediate();
     if (is_int16(value))
       chi(dst, opnd);
@@ -3178,7 +3203,7 @@ void TurboAssembler::Cmp32(Register dst, const Operand& opnd) {
 // This helper will set up proper relocation entries if required.
 void TurboAssembler::CmpP(Register dst, const Operand& opnd) {
 #if V8_TARGET_ARCH_S390X
-  if (opnd.rmode() == kRelocInfo_NONEPTR) {
+  if (opnd.rmode() == RelocInfo::NONE) {
     cgfi(dst, opnd);
   } else {
     mov(r0, opnd);  // Need to generate 64-bit relocation
@@ -3301,7 +3326,7 @@ void TurboAssembler::LoadIntLiteral(Register dst, int value) {
 void TurboAssembler::LoadSmiLiteral(Register dst, Smi* smi) {
   intptr_t value = reinterpret_cast<intptr_t>(smi);
 #if V8_TARGET_ARCH_S390X
-  DCHECK_EQ(value & 0xffffffff, 0);
+  DCHECK_EQ(value & 0xFFFFFFFF, 0);
   // The smi value is loaded in upper 32-bits.  Lower 32-bit are zeros.
   llihf(dst, Operand(value >> 32));
 #else
@@ -3402,7 +3427,7 @@ void TurboAssembler::SubSmiLiteral(Register dst, Register src, Smi* smi,
 void TurboAssembler::AndSmiLiteral(Register dst, Register src, Smi* smi) {
   if (dst != src) LoadRR(dst, src);
 #if V8_TARGET_ARCH_S390X
-  DCHECK_EQ(reinterpret_cast<intptr_t>(smi) & 0xffffffff, 0);
+  DCHECK_EQ(reinterpret_cast<intptr_t>(smi) & 0xFFFFFFFF, 0);
   int value = static_cast<int>(reinterpret_cast<intptr_t>(smi) >> 32);
   nihf(dst, Operand(value));
 #else
@@ -3465,7 +3490,7 @@ void TurboAssembler::StoreP(Register src, const MemOperand& mem,
 void TurboAssembler::StoreP(const MemOperand& mem, const Operand& opnd,
                             Register scratch) {
   // Relocations not supported
-  DCHECK_EQ(opnd.rmode(), kRelocInfo_NONEPTR);
+  DCHECK_EQ(opnd.rmode(), RelocInfo::NONE);
 
   // Try to use MVGHI/MVHI
   if (CpuFeatures::IsSupported(GENERAL_INSTR_EXT) && is_uint12(mem.offset()) &&
@@ -4263,6 +4288,14 @@ bool AreAliased(DoubleRegister reg1, DoubleRegister reg2, DoubleRegister reg3,
   return n_of_valid_regs != n_of_non_aliasing_regs;
 }
 #endif
+
+void TurboAssembler::ResetSpeculationPoisonRegister() {
+  mov(kSpeculationPoisonRegister, Operand(-1));
+}
+
+void TurboAssembler::ComputeCodeStartAddress(Register dst) {
+  larl(dst, Operand(-pc_offset() / 2));
+}
 
 }  // namespace internal
 }  // namespace v8

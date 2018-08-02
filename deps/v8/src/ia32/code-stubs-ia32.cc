@@ -150,71 +150,56 @@ void MathPowStub::Generate(MacroAssembler* masm) {
   __ mov(scratch, Immediate(1));
   __ Cvtsi2sd(double_result, scratch);
 
-  if (exponent_type() == TAGGED) {
-    __ JumpIfNotSmi(exponent, &exponent_not_smi, Label::kNear);
-    __ SmiUntag(exponent);
-    __ jmp(&int_exponent);
+  Label fast_power, try_arithmetic_simplification;
+  __ DoubleToI(exponent, double_exponent, double_scratch,
+               &try_arithmetic_simplification, &try_arithmetic_simplification);
+  __ jmp(&int_exponent);
 
-    __ bind(&exponent_not_smi);
-    __ movsd(double_exponent,
-              FieldOperand(exponent, HeapNumber::kValueOffset));
-  }
+  __ bind(&try_arithmetic_simplification);
+  // Skip to runtime if possibly NaN (indicated by the indefinite integer).
+  __ cvttsd2si(exponent, Operand(double_exponent));
+  __ cmp(exponent, Immediate(0x1));
+  __ j(overflow, &call_runtime);
 
-  if (exponent_type() != INTEGER) {
-    Label fast_power, try_arithmetic_simplification;
-    __ DoubleToI(exponent, double_exponent, double_scratch,
-                 TREAT_MINUS_ZERO_AS_ZERO, &try_arithmetic_simplification,
-                 &try_arithmetic_simplification,
-                 &try_arithmetic_simplification);
-    __ jmp(&int_exponent);
+  // Using FPU instructions to calculate power.
+  Label fast_power_failed;
+  __ bind(&fast_power);
+  __ fnclex();  // Clear flags to catch exceptions later.
+  // Transfer (B)ase and (E)xponent onto the FPU register stack.
+  __ sub(esp, Immediate(kDoubleSize));
+  __ movsd(Operand(esp, 0), double_exponent);
+  __ fld_d(Operand(esp, 0));  // E
+  __ movsd(Operand(esp, 0), double_base);
+  __ fld_d(Operand(esp, 0));  // B, E
 
-    __ bind(&try_arithmetic_simplification);
-    // Skip to runtime if possibly NaN (indicated by the indefinite integer).
-    __ cvttsd2si(exponent, Operand(double_exponent));
-    __ cmp(exponent, Immediate(0x1));
-    __ j(overflow, &call_runtime);
+  // Exponent is in st(1) and base is in st(0)
+  // B ^ E = (2^(E * log2(B)) - 1) + 1 = (2^X - 1) + 1 for X = E * log2(B)
+  // FYL2X calculates st(1) * log2(st(0))
+  __ fyl2x();    // X
+  __ fld(0);     // X, X
+  __ frndint();  // rnd(X), X
+  __ fsub(1);    // rnd(X), X-rnd(X)
+  __ fxch(1);    // X - rnd(X), rnd(X)
+  // F2XM1 calculates 2^st(0) - 1 for -1 < st(0) < 1
+  __ f2xm1();   // 2^(X-rnd(X)) - 1, rnd(X)
+  __ fld1();    // 1, 2^(X-rnd(X)) - 1, rnd(X)
+  __ faddp(1);  // 2^(X-rnd(X)), rnd(X)
+  // FSCALE calculates st(0) * 2^st(1)
+  __ fscale();  // 2^X, rnd(X)
+  __ fstp(1);   // 2^X
+  // Bail out to runtime in case of exceptions in the status word.
+  __ fnstsw_ax();
+  __ test_b(eax, Immediate(0x5F));  // We check for all but precision exception.
+  __ j(not_zero, &fast_power_failed, Label::kNear);
+  __ fstp_d(Operand(esp, 0));
+  __ movsd(double_result, Operand(esp, 0));
+  __ add(esp, Immediate(kDoubleSize));
+  __ jmp(&done);
 
-    // Using FPU instructions to calculate power.
-    Label fast_power_failed;
-    __ bind(&fast_power);
-    __ fnclex();  // Clear flags to catch exceptions later.
-    // Transfer (B)ase and (E)xponent onto the FPU register stack.
-    __ sub(esp, Immediate(kDoubleSize));
-    __ movsd(Operand(esp, 0), double_exponent);
-    __ fld_d(Operand(esp, 0));  // E
-    __ movsd(Operand(esp, 0), double_base);
-    __ fld_d(Operand(esp, 0));  // B, E
-
-    // Exponent is in st(1) and base is in st(0)
-    // B ^ E = (2^(E * log2(B)) - 1) + 1 = (2^X - 1) + 1 for X = E * log2(B)
-    // FYL2X calculates st(1) * log2(st(0))
-    __ fyl2x();    // X
-    __ fld(0);     // X, X
-    __ frndint();  // rnd(X), X
-    __ fsub(1);    // rnd(X), X-rnd(X)
-    __ fxch(1);    // X - rnd(X), rnd(X)
-    // F2XM1 calculates 2^st(0) - 1 for -1 < st(0) < 1
-    __ f2xm1();    // 2^(X-rnd(X)) - 1, rnd(X)
-    __ fld1();     // 1, 2^(X-rnd(X)) - 1, rnd(X)
-    __ faddp(1);   // 2^(X-rnd(X)), rnd(X)
-    // FSCALE calculates st(0) * 2^st(1)
-    __ fscale();   // 2^X, rnd(X)
-    __ fstp(1);    // 2^X
-    // Bail out to runtime in case of exceptions in the status word.
-    __ fnstsw_ax();
-    __ test_b(eax,
-              Immediate(0x5F));  // We check for all but precision exception.
-    __ j(not_zero, &fast_power_failed, Label::kNear);
-    __ fstp_d(Operand(esp, 0));
-    __ movsd(double_result, Operand(esp, 0));
-    __ add(esp, Immediate(kDoubleSize));
-    __ jmp(&done);
-
-    __ bind(&fast_power_failed);
-    __ fninit();
-    __ add(esp, Immediate(kDoubleSize));
-    __ jmp(&call_runtime);
-  }
+  __ bind(&fast_power_failed);
+  __ fninit();
+  __ add(esp, Immediate(kDoubleSize));
+  __ jmp(&call_runtime);
 
   // Calculate power with integer exponent.
   __ bind(&int_exponent);
@@ -424,6 +409,12 @@ void CEntryStub::Generate(MacroAssembler* masm) {
   __ mov(Operand(ebp, StandardFrameConstants::kContextOffset), esi);
   __ bind(&skip);
 
+  // Reset the masking register. This is done independent of the underlying
+  // feature flag {FLAG_branch_load_poisoning} to make the snapshot work with
+  // both configurations. It is safe to always do this, because the underlying
+  // register is caller-saved and can be arbitrarily clobbered.
+  __ ResetSpeculationPoisonRegister();
+
   // Compute the handler entry address and jump to it.
   __ mov(edi, Operand::StaticVariable(pending_handler_entrypoint_address));
   __ jmp(edi);
@@ -486,12 +477,7 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
   // pop the faked function when we return. Notice that we cannot store a
   // reference to the trampoline code directly in this stub, because the
   // builtin stubs may not have been generated yet.
-  if (type() == StackFrame::CONSTRUCT_ENTRY) {
-    __ Call(BUILTIN_CODE(isolate(), JSConstructEntryTrampoline),
-            RelocInfo::CODE_TARGET);
-  } else {
-    __ Call(BUILTIN_CODE(isolate(), JSEntryTrampoline), RelocInfo::CODE_TARGET);
-  }
+  __ Call(EntryTrampoline(), RelocInfo::CODE_TARGET);
 
   // Unlink this frame from the handler chain.
   __ PopStackHandler();
@@ -588,7 +574,7 @@ static void CreateArrayDispatch(MacroAssembler* masm,
     }
 
     // If we reached this point there is a problem.
-    __ Abort(kUnexpectedElementsKindInArrayConstructor);
+    __ Abort(AbortReason::kUnexpectedElementsKindInArrayConstructor);
   } else {
     UNREACHABLE();
   }
@@ -632,7 +618,7 @@ static void CreateArrayDispatchOneArgument(MacroAssembler* masm,
       Handle<Map> allocation_site_map =
           masm->isolate()->factory()->allocation_site_map();
       __ cmp(FieldOperand(ebx, 0), Immediate(allocation_site_map));
-      __ Assert(equal, kExpectedAllocationSite);
+      __ Assert(equal, AbortReason::kExpectedAllocationSite);
     }
 
     // Save the resulting elements kind in type info. We can't just store r3
@@ -657,7 +643,7 @@ static void CreateArrayDispatchOneArgument(MacroAssembler* masm,
     }
 
     // If we reached this point there is a problem.
-    __ Abort(kUnexpectedElementsKindInArrayConstructor);
+    __ Abort(AbortReason::kUnexpectedElementsKindInArrayConstructor);
   } else {
     UNREACHABLE();
   }
@@ -731,9 +717,9 @@ void ArrayConstructorStub::Generate(MacroAssembler* masm) {
     __ mov(ecx, FieldOperand(edi, JSFunction::kPrototypeOrInitialMapOffset));
     // Will both indicate a nullptr and a Smi.
     __ test(ecx, Immediate(kSmiTagMask));
-    __ Assert(not_zero, kUnexpectedInitialMapForArrayFunction);
+    __ Assert(not_zero, AbortReason::kUnexpectedInitialMapForArrayFunction);
     __ CmpObjectType(ecx, MAP_TYPE, ecx);
-    __ Assert(equal, kUnexpectedInitialMapForArrayFunction);
+    __ Assert(equal, AbortReason::kUnexpectedInitialMapForArrayFunction);
 
     // We should either have undefined in ebx or a valid AllocationSite
     __ AssertUndefinedOrAllocationSite(ebx);
@@ -828,9 +814,9 @@ void InternalArrayConstructorStub::Generate(MacroAssembler* masm) {
     __ mov(ecx, FieldOperand(edi, JSFunction::kPrototypeOrInitialMapOffset));
     // Will both indicate a nullptr and a Smi.
     __ test(ecx, Immediate(kSmiTagMask));
-    __ Assert(not_zero, kUnexpectedInitialMapForArrayFunction);
+    __ Assert(not_zero, AbortReason::kUnexpectedInitialMapForArrayFunction);
     __ CmpObjectType(ecx, MAP_TYPE, ecx);
-    __ Assert(equal, kUnexpectedInitialMapForArrayFunction);
+    __ Assert(equal, AbortReason::kUnexpectedInitialMapForArrayFunction);
   }
 
   // Figure out the right elements kind
@@ -847,8 +833,9 @@ void InternalArrayConstructorStub::Generate(MacroAssembler* masm) {
     __ cmp(ecx, Immediate(PACKED_ELEMENTS));
     __ j(equal, &done);
     __ cmp(ecx, Immediate(HOLEY_ELEMENTS));
-    __ Assert(equal,
-              kInvalidElementsKindForInternalArrayOrInternalPackedArray);
+    __ Assert(
+        equal,
+        AbortReason::kInvalidElementsKindForInternalArrayOrInternalPackedArray);
     __ bind(&done);
   }
 
@@ -959,7 +946,7 @@ static void CallApiFunctionAndReturn(MacroAssembler* masm,
   // previous handle scope.
   __ mov(Operand::StaticVariable(next_address), ebx);
   __ sub(Operand::StaticVariable(level_address), Immediate(1));
-  __ Assert(above_equal, kInvalidHandleScopeLevel);
+  __ Assert(above_equal, AbortReason::kInvalidHandleScopeLevel);
   __ cmp(edi, Operand::StaticVariable(limit_address));
   __ j(not_equal, &delete_allocated_handles);
 
@@ -1007,7 +994,7 @@ static void CallApiFunctionAndReturn(MacroAssembler* masm,
   __ cmp(return_value, isolate->factory()->null_value());
   __ j(equal, &ok, Label::kNear);
 
-  __ Abort(kAPICallReturnedInvalidObject);
+  __ Abort(AbortReason::kAPICallReturnedInvalidObject);
 
   __ bind(&ok);
 #endif

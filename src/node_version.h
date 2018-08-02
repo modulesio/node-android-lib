@@ -23,13 +23,13 @@
 #define SRC_NODE_VERSION_H_
 
 #define NODE_MAJOR_VERSION 10
-#define NODE_MINOR_VERSION 0
+#define NODE_MINOR_VERSION 8
 #define NODE_PATCH_VERSION 0
 
 #define NODE_VERSION_IS_LTS 0
 #define NODE_VERSION_LTS_CODENAME ""
 
-#define NODE_VERSION_IS_RELEASE 0
+#define NODE_VERSION_IS_RELEASE 1
 
 #ifndef NODE_STRINGIFY
 #define NODE_STRINGIFY(n) NODE_STRINGIFY_HELPER(n)
@@ -105,12 +105,15 @@
  * V8 6.2: 59
  * V8 6.3: 60
  * V8 6.4: 61
+ * V8 6.5: 62
+ * V8 6.6: 63
+ * V8 6.7: 64
  *
  * More information can be found at https://nodejs.org/en/download/releases/
  */
-#define NODE_MODULE_VERSION 61
+#define NODE_MODULE_VERSION 64
 
 // the NAPI_VERSION provided by this version of the runtime
-#define NAPI_VERSION  2
+#define NAPI_VERSION  3
 
 #endif  // SRC_NODE_VERSION_H_

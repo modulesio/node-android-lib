@@ -43,7 +43,7 @@ void DoubleToIStub::Generate(MacroAssembler* masm) {
   Register scratch = GetRegisterThatIsNotOneOf(result_reg);
   Register scratch2 = GetRegisterThatIsNotOneOf(result_reg, scratch);
   Register scratch3 = GetRegisterThatIsNotOneOf(result_reg, scratch, scratch2);
-  DoubleRegister double_scratch = kLithiumScratchDouble;
+  DoubleRegister double_scratch = kScratchDoubleReg;
 
   // Account for saved regs.
   const int kArgumentOffset = 3 * kPointerSize;
@@ -179,53 +179,34 @@ void MathPowStub::Generate(MacroAssembler* masm) {
   const Register scratch2 = t3;
 
   Label call_runtime, done, int_exponent;
-  if (exponent_type() == TAGGED) {
-    // Base is already in double_base.
-    __ UntagAndJumpIfSmi(scratch, exponent, &int_exponent);
 
-    __ Ldc1(double_exponent,
-            FieldMemOperand(exponent, HeapNumber::kValueOffset));
+  Label int_exponent_convert;
+  // Detect integer exponents stored as double.
+  __ EmitFPUTruncate(kRoundToMinusInf, scratch, double_exponent, at,
+                     double_scratch, scratch2, kCheckForInexactConversion);
+  // scratch2 == 0 means there was no conversion error.
+  __ Branch(&int_exponent_convert, eq, scratch2, Operand(zero_reg));
+
+  __ push(ra);
+  {
+    AllowExternalCallThatCantCauseGC scope(masm);
+    __ PrepareCallCFunction(0, 2, scratch2);
+    __ MovToFloatParameters(double_base, double_exponent);
+    __ CallCFunction(ExternalReference::power_double_double_function(isolate()),
+                     0, 2);
   }
+  __ pop(ra);
+  __ MovFromFloatResult(double_result);
+  __ jmp(&done);
 
-  if (exponent_type() != INTEGER) {
-    Label int_exponent_convert;
-    // Detect integer exponents stored as double.
-    __ EmitFPUTruncate(kRoundToMinusInf,
-                       scratch,
-                       double_exponent,
-                       at,
-                       double_scratch,
-                       scratch2,
-                       kCheckForInexactConversion);
-    // scratch2 == 0 means there was no conversion error.
-    __ Branch(&int_exponent_convert, eq, scratch2, Operand(zero_reg));
-
-    __ push(ra);
-    {
-      AllowExternalCallThatCantCauseGC scope(masm);
-      __ PrepareCallCFunction(0, 2, scratch2);
-      __ MovToFloatParameters(double_base, double_exponent);
-      __ CallCFunction(
-          ExternalReference::power_double_double_function(isolate()),
-          0, 2);
-    }
-    __ pop(ra);
-    __ MovFromFloatResult(double_result);
-    __ jmp(&done);
-
-    __ bind(&int_exponent_convert);
-  }
+  __ bind(&int_exponent_convert);
 
   // Calculate power with integer exponent.
   __ bind(&int_exponent);
 
   // Get two copies of exponent in the registers scratch and exponent.
-  if (exponent_type() == INTEGER) {
-    __ mov(scratch, exponent);
-  } else {
-    // Exponent has previously been stored into scratch as untagged integer.
-    __ mov(exponent, scratch);
-  }
+  // Exponent has previously been stored into scratch as untagged integer.
+  __ mov(exponent, scratch);
 
   __ mov_d(double_scratch, double_base);  // Back up base.
   __ Move(double_result, 1.0);
@@ -238,7 +219,8 @@ void MathPowStub::Generate(MacroAssembler* masm) {
   // (happens only when input is MIN_INT).
   __ Branch(&bail_out, gt, zero_reg, Operand(scratch));
   __ bind(&positive_exponent);
-  __ Assert(ge, kUnexpectedNegativeValue, scratch, Operand(zero_reg));
+  __ Assert(ge, AbortReason::kUnexpectedNegativeValue, scratch,
+            Operand(zero_reg));
 
   Label while_true, no_carry, loop_end;
   __ bind(&while_true);
@@ -263,7 +245,8 @@ void MathPowStub::Generate(MacroAssembler* masm) {
   __ div_d(double_result, double_scratch, double_result);
   // Test whether result is zero.  Bail out to check for subnormal result.
   // Due to subnormals, x^-y == (1/x)^y does not hold in all cases.
-  __ BranchF(&done, nullptr, ne, double_result, kDoubleRegZero);
+  __ CompareF64(EQ, double_result, kDoubleRegZero);
+  __ BranchFalseShortF(&done);
 
   // double_exponent may not contain the exponent value if the input was a
   // smi.  We set it with exponent value before bailing out.
@@ -465,6 +448,12 @@ void CEntryStub::Generate(MacroAssembler* masm) {
   __ sw(cp, MemOperand(fp, StandardFrameConstants::kContextOffset));
   __ bind(&zero);
 
+  // Reset the masking register. This is done independent of the underlying
+  // feature flag {FLAG_branch_load_poisoning} to make the snapshot work with
+  // both configurations. It is safe to always do this, because the underlying
+  // register is caller-saved and can be arbitrarily clobbered.
+  __ ResetSpeculationPoisonRegister();
+
   // Compute the handler entry address and jump to it.
   __ li(t9, Operand(pending_handler_entrypoint_address));
   __ lw(t9, MemOperand(t9));
@@ -527,7 +516,7 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
   // caller fp          |
   // function slot      | entry frame
   // context slot       |
-  // bad fp (0xff...f)  |
+  // bad fp (0xFF...F)  |
   // callee saved registers + ra
   // 4 args slots
   // args
@@ -589,13 +578,7 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
   // callee saved registers + ra
   // 4 args slots
   // args
-
-  if (type() == StackFrame::CONSTRUCT_ENTRY) {
-    __ Call(BUILTIN_CODE(isolate, JSConstructEntryTrampoline),
-            RelocInfo::CODE_TARGET);
-  } else {
-    __ Call(BUILTIN_CODE(isolate, JSEntryTrampoline), RelocInfo::CODE_TARGET);
-  }
+  __ Call(EntryTrampoline(), RelocInfo::CODE_TARGET);
 
   // Unlink this frame from the handler chain.
   __ PopStackHandler();
@@ -646,8 +629,8 @@ void DirectCEntryStub::Generate(MacroAssembler* masm) {
     // filled with kZapValue by the GC.
     // Dereference the address and check for this.
     __ lw(t0, MemOperand(t9));
-    __ Assert(ne, kReceivedInvalidReturnAddress, t0,
-        Operand(reinterpret_cast<uint32_t>(kZapValue)));
+    __ Assert(ne, AbortReason::kReceivedInvalidReturnAddress, t0,
+              Operand(reinterpret_cast<uint32_t>(kZapValue)));
   }
   __ Jump(t9);
 }
@@ -761,7 +744,7 @@ static void CreateArrayDispatch(MacroAssembler* masm,
     }
 
     // If we reached this point there is a problem.
-    __ Abort(kUnexpectedElementsKindInArrayConstructor);
+    __ Abort(AbortReason::kUnexpectedElementsKindInArrayConstructor);
   } else {
     UNREACHABLE();
   }
@@ -803,7 +786,7 @@ static void CreateArrayDispatchOneArgument(MacroAssembler* masm,
     if (FLAG_debug_code) {
       __ lw(t1, FieldMemOperand(a2, 0));
       __ LoadRoot(at, Heap::kAllocationSiteMapRootIndex);
-      __ Assert(eq, kExpectedAllocationSite, t1, Operand(at));
+      __ Assert(eq, AbortReason::kExpectedAllocationSite, t1, Operand(at));
     }
 
     // Save the resulting elements kind in type info. We can't just store a3
@@ -826,7 +809,7 @@ static void CreateArrayDispatchOneArgument(MacroAssembler* masm,
     }
 
     // If we reached this point there is a problem.
-    __ Abort(kUnexpectedElementsKindInArrayConstructor);
+    __ Abort(AbortReason::kUnexpectedElementsKindInArrayConstructor);
   } else {
     UNREACHABLE();
   }
@@ -901,11 +884,11 @@ void ArrayConstructorStub::Generate(MacroAssembler* masm) {
     __ lw(t0, FieldMemOperand(a1, JSFunction::kPrototypeOrInitialMapOffset));
     // Will both indicate a nullptr and a Smi.
     __ SmiTst(t0, at);
-    __ Assert(ne, kUnexpectedInitialMapForArrayFunction,
-        at, Operand(zero_reg));
+    __ Assert(ne, AbortReason::kUnexpectedInitialMapForArrayFunction, at,
+              Operand(zero_reg));
     __ GetObjectType(t0, t0, t1);
-    __ Assert(eq, kUnexpectedInitialMapForArrayFunction,
-        t1, Operand(MAP_TYPE));
+    __ Assert(eq, AbortReason::kUnexpectedInitialMapForArrayFunction, t1,
+              Operand(MAP_TYPE));
 
     // We should either have undefined in a2 or a valid AllocationSite
     __ AssertUndefinedOrAllocationSite(a2, t0);
@@ -983,11 +966,11 @@ void InternalArrayConstructorStub::Generate(MacroAssembler* masm) {
     __ lw(a3, FieldMemOperand(a1, JSFunction::kPrototypeOrInitialMapOffset));
     // Will both indicate a nullptr and a Smi.
     __ SmiTst(a3, at);
-    __ Assert(ne, kUnexpectedInitialMapForArrayFunction,
-        at, Operand(zero_reg));
+    __ Assert(ne, AbortReason::kUnexpectedInitialMapForArrayFunction, at,
+              Operand(zero_reg));
     __ GetObjectType(a3, a3, t0);
-    __ Assert(eq, kUnexpectedInitialMapForArrayFunction,
-        t0, Operand(MAP_TYPE));
+    __ Assert(eq, AbortReason::kUnexpectedInitialMapForArrayFunction, t0,
+              Operand(MAP_TYPE));
   }
 
   // Figure out the right elements kind.
@@ -1002,8 +985,10 @@ void InternalArrayConstructorStub::Generate(MacroAssembler* masm) {
   if (FLAG_debug_code) {
     Label done;
     __ Branch(&done, eq, a3, Operand(PACKED_ELEMENTS));
-    __ Assert(eq, kInvalidElementsKindForInternalArrayOrInternalPackedArray, a3,
-              Operand(HOLEY_ELEMENTS));
+    __ Assert(
+        eq,
+        AbortReason::kInvalidElementsKindForInternalArrayOrInternalPackedArray,
+        a3, Operand(HOLEY_ELEMENTS));
     __ bind(&done);
   }
 
@@ -1103,7 +1088,8 @@ static void CallApiFunctionAndReturn(MacroAssembler* masm,
   __ sw(s0, MemOperand(s3, kNextOffset));
   if (__ emit_debug_code()) {
     __ lw(a1, MemOperand(s3, kLevelOffset));
-    __ Check(eq, kUnexpectedLevelAfterReturnFromApiCall, a1, Operand(s2));
+    __ Check(eq, AbortReason::kUnexpectedLevelAfterReturnFromApiCall, a1,
+             Operand(s2));
   }
   __ Subu(s2, s2, Operand(1));
   __ sw(s2, MemOperand(s3, kLevelOffset));

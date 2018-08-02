@@ -301,18 +301,16 @@ InspectorTest.Session = class {
 
   logAsyncStackTrace(asyncStackTrace) {
     while (asyncStackTrace) {
-      if (asyncStackTrace.promiseCreationFrame) {
-        var frame = asyncStackTrace.promiseCreationFrame;
-        InspectorTest.log(`-- ${asyncStackTrace.description} (${frame.url}:${frame.lineNumber}:${frame.columnNumber})--`);
-      } else {
-        InspectorTest.log(`-- ${asyncStackTrace.description} --`);
-      }
+      InspectorTest.log(`-- ${asyncStackTrace.description || '<empty>'} --`);
       this.logCallFrames(asyncStackTrace.callFrames);
+      if (asyncStackTrace.parentId) InspectorTest.log('  <external stack>');
       asyncStackTrace = asyncStackTrace.parent;
     }
   }
 
   _sendCommandPromise(method, params) {
+    if (typeof params !== 'object')
+      utils.print(`WARNING: non-object params passed to invocation of method ${method}`);
     if (InspectorTest._commandsForLogging.has(method))
       utils.print(method + ' called');
     var requestId = ++this._requestId;

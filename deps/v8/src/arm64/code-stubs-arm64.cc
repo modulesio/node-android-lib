@@ -30,7 +30,7 @@ namespace internal {
 
 void ArrayNArgumentsConstructorStub::Generate(MacroAssembler* masm) {
   __ Mov(x5, Operand(x0, LSL, kPointerSizeLog2));
-  __ Str(x1, MemOperand(jssp, x5));
+  __ Poke(x1, Operand(x5));
   __ Push(x1, x2);
   __ Add(x0, x0, Operand(3));
   __ TailCallRuntime(Runtime::kNewArray);
@@ -42,7 +42,6 @@ void DoubleToIStub::Generate(MacroAssembler* masm) {
   Register result = destination();
 
   DCHECK(result.Is64Bits());
-  DCHECK(jssp.Is(masm->StackPointer()));
 
   UseScratchRegisterScope temps(masm);
   Register scratch1 = temps.AcquireX();
@@ -75,7 +74,7 @@ void DoubleToIStub::Generate(MacroAssembler* masm) {
   if (masm->emit_debug_code()) {
     __ Cmp(exponent, HeapNumber::kExponentBias + 63);
     // Exponents less than this should have been handled by the Fcvt case.
-    __ Check(ge, kUnexpectedValue);
+    __ Check(ge, AbortReason::kUnexpectedValue);
   }
 
   // Isolate the mantissa bits, and set the implicit '1'.
@@ -100,8 +99,8 @@ void DoubleToIStub::Generate(MacroAssembler* masm) {
 
 void MathPowStub::Generate(MacroAssembler* masm) {
   // Stack on entry:
-  // jssp[0]: Exponent (as a tagged value).
-  // jssp[1]: Base (as a tagged value).
+  // sp[0]: Exponent (as a tagged value).
+  // sp[1]: Base (as a tagged value).
   //
   // The (tagged) result will be returned in x0, as a heap number.
 
@@ -123,35 +122,28 @@ void MathPowStub::Generate(MacroAssembler* masm) {
   Label done;
 
   // Unpack the inputs.
-  if (exponent_type() == TAGGED) {
-    __ JumpIfSmi(exponent_tagged, &exponent_is_smi);
-    __ Ldr(exponent_double,
-           FieldMemOperand(exponent_tagged, HeapNumber::kValueOffset));
-  }
 
   // Handle double (heap number) exponents.
-  if (exponent_type() != INTEGER) {
-    // Detect integer exponents stored as doubles and handle those in the
-    // integer fast-path.
-    __ TryRepresentDoubleAsInt64(exponent_integer, exponent_double,
-                                 scratch0_double, &exponent_is_integer);
+  // Detect integer exponents stored as doubles and handle those in the
+  // integer fast-path.
+  __ TryRepresentDoubleAsInt64(exponent_integer, exponent_double,
+                               scratch0_double, &exponent_is_integer);
 
-    {
-      AllowExternalCallThatCantCauseGC scope(masm);
-      __ Mov(saved_lr, lr);
-      __ CallCFunction(
-          ExternalReference::power_double_double_function(isolate()), 0, 2);
-      __ Mov(lr, saved_lr);
-      __ B(&done);
-    }
-
-    // Handle SMI exponents.
-    __ Bind(&exponent_is_smi);
-    //  x10   base_tagged       The tagged base (input).
-    //  x11   exponent_tagged   The tagged exponent (input).
-    //  d1    base_double       The base as a double.
-    __ SmiUntag(exponent_integer, exponent_tagged);
+  {
+    AllowExternalCallThatCantCauseGC scope(masm);
+    __ Mov(saved_lr, lr);
+    __ CallCFunction(ExternalReference::power_double_double_function(isolate()),
+                     0, 2);
+    __ Mov(lr, saved_lr);
+    __ B(&done);
   }
+
+  // Handle SMI exponents.
+  __ Bind(&exponent_is_smi);
+  //  x10   base_tagged       The tagged base (input).
+  //  x11   exponent_tagged   The tagged exponent (input).
+  //  d1    base_double       The base as a double.
+  __ SmiUntag(exponent_integer, exponent_tagged);
 
   __ Bind(&exponent_is_integer);
   //  x10   base_tagged       The tagged base (input).
@@ -276,15 +268,14 @@ void CEntryStub::Generate(MacroAssembler* masm) {
   // The stack on entry holds the arguments and the receiver, with the receiver
   // at the highest address:
   //
-  //    jssp]argc-1]: receiver
-  //    jssp[argc-2]: arg[argc-2]
+  //    sp]argc-1]: receiver
+  //    sp[argc-2]: arg[argc-2]
   //    ...           ...
-  //    jssp[1]:      arg[1]
-  //    jssp[0]:      arg[0]
+  //    sp[1]:      arg[1]
+  //    sp[0]:      arg[0]
   //
   // The arguments are in reverse order, so that arg[argc-2] is actually the
   // first argument to the target function and arg[0] is the last.
-  DCHECK(jssp.Is(__ StackPointer()));
   const Register& argc_input = x0;
   const Register& target_input = x1;
 
@@ -316,7 +307,6 @@ void CEntryStub::Generate(MacroAssembler* masm) {
   __ EnterExitFrame(
       save_doubles(), x10, extra_stack_space,
       is_builtin_exit() ? StackFrame::BUILTIN_EXIT : StackFrame::EXIT);
-  DCHECK(csp.Is(__ StackPointer()));
 
   // Poke callee-saved registers into reserved space.
   __ Poke(argv, 1 * kPointerSize);
@@ -351,12 +341,12 @@ void CEntryStub::Generate(MacroAssembler* masm) {
   //   fp -> fp[0]:    CallerFP (old fp)
   //         fp[-8]:   Space reserved for SPOffset.
   //         fp[-16]:  CodeObject()
-  //         csp[...]: Saved doubles, if saved_doubles is true.
-  //         csp[32]:  Alignment padding, if necessary.
-  //         csp[24]:  Preserved x23 (used for target).
-  //         csp[16]:  Preserved x22 (used for argc).
-  //         csp[8]:   Preserved x21 (used for argv).
-  //  csp -> csp[0]:   Space reserved for the return address.
+  //         sp[...]:  Saved doubles, if saved_doubles is true.
+  //         sp[32]:   Alignment padding, if necessary.
+  //         sp[24]:   Preserved x23 (used for target).
+  //         sp[16]:   Preserved x22 (used for argc).
+  //         sp[8]:    Preserved x21 (used for argv).
+  //   sp -> sp[0]:    Space reserved for the return address.
   //
   // After a successful call, the exit frame, preserved registers (x21-x23) and
   // the arguments (including the receiver) are dropped or popped as
@@ -365,8 +355,6 @@ void CEntryStub::Generate(MacroAssembler* masm) {
   // After an unsuccessful call, the exit frame and suchlike are left
   // untouched, and the stub either throws an exception by jumping to one of
   // the exception_returned label.
-
-  DCHECK(csp.Is(__ StackPointer()));
 
   // Prepare AAPCS64 arguments to pass to the builtin.
   __ Mov(x0, argc);
@@ -385,7 +373,7 @@ void CEntryStub::Generate(MacroAssembler* masm) {
     __ Ldr(temp, MemOperand(fp, ExitFrameConstants::kSPOffset));
     __ Ldr(temp, MemOperand(temp, -static_cast<int64_t>(kXRegSize)));
     __ Cmp(temp, x12);
-    __ Check(eq, kReturnAddressNotFoundInFrame);
+    __ Check(eq, AbortReason::kReturnAddressNotFoundInFrame);
   }
 
   // Call the builtin.
@@ -415,18 +403,13 @@ void CEntryStub::Generate(MacroAssembler* masm) {
   __ Peek(argc, 2 * kPointerSize);
   __ Peek(target, 3 * kPointerSize);
 
-  __ LeaveExitFrame(save_doubles(), x10);
-  DCHECK(jssp.Is(__ StackPointer()));
+  __ LeaveExitFrame(save_doubles(), x10, x9);
   if (!argv_in_register()) {
     // Drop the remaining stack slots and return from the stub.
     __ DropArguments(x11);
   }
   __ AssertFPCRState();
   __ Ret();
-
-  // The stack pointer is still csp if we aren't returning, and the frame
-  // hasn't changed (except for the return address).
-  __ SetStackPointer(csp);
 
   // Handling of exception.
   __ Bind(&exception_returned);
@@ -444,7 +427,6 @@ void CEntryStub::Generate(MacroAssembler* masm) {
   // contain the current pending exception, don't clobber it.
   ExternalReference find_handler(Runtime::kUnwindAndFindExceptionHandler,
                                  isolate());
-  DCHECK(csp.Is(masm->StackPointer()));
   {
     FrameScope scope(masm, StackFrame::MANUAL);
     __ Mov(x0, 0);  // argc.
@@ -453,18 +435,16 @@ void CEntryStub::Generate(MacroAssembler* masm) {
     __ CallCFunction(find_handler, 3);
   }
 
-  // We didn't execute a return case, so the stack frame hasn't been updated
-  // (except for the return address slot). However, we don't need to initialize
-  // jssp because the throw method will immediately overwrite it when it
-  // unwinds the stack.
-  __ SetStackPointer(jssp);
-
   // Retrieve the handler context, SP and FP.
   __ Mov(cp, Operand(pending_handler_context_address));
   __ Ldr(cp, MemOperand(cp));
-  __ Mov(jssp, Operand(pending_handler_sp_address));
-  __ Ldr(jssp, MemOperand(jssp));
-  __ Mov(csp, jssp);
+  {
+    UseScratchRegisterScope temps(masm);
+    Register scratch = temps.AcquireX();
+    __ Mov(scratch, Operand(pending_handler_sp_address));
+    __ Ldr(scratch, MemOperand(scratch));
+    __ Mov(sp, scratch);
+  }
   __ Mov(fp, Operand(pending_handler_fp_address));
   __ Ldr(fp, MemOperand(fp));
 
@@ -475,15 +455,20 @@ void CEntryStub::Generate(MacroAssembler* masm) {
   __ Str(cp, MemOperand(fp, StandardFrameConstants::kContextOffset));
   __ Bind(&not_js_frame);
 
+  // Reset the masking register. This is done independent of the underlying
+  // feature flag {FLAG_branch_load_poisoning} to make the snapshot work with
+  // both configurations. It is safe to always do this, because the underlying
+  // register is caller-saved and can be arbitrarily clobbered.
+  __ ResetSpeculationPoisonRegister();
+
   // Compute the handler entry address and jump to it.
   __ Mov(x10, Operand(pending_handler_entrypoint_address));
   __ Ldr(x10, MemOperand(x10));
   __ Br(x10);
 }
 
-
 // This is the entry point from C++. 5 arguments are provided in x0-x4.
-// See use of the CALL_GENERATED_CODE macro for example in src/execution.cc.
+// See use of the JSEntryFunction for example in src/execution.cc.
 // Input:
 //   x0: code entry.
 //   x1: function.
@@ -493,7 +478,6 @@ void CEntryStub::Generate(MacroAssembler* masm) {
 // Output:
 //   x0: result.
 void JSEntryStub::Generate(MacroAssembler* masm) {
-  DCHECK(jssp.Is(__ StackPointer()));
   Register code_entry = x0;
 
   // Enable instruction instrumentation. This only works on the simulator, and
@@ -502,20 +486,15 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
 
   Label invoke, handler_entry, exit;
 
-  // Push callee-saved registers and synchronize the system stack pointer (csp)
-  // and the JavaScript stack pointer (jssp).
-  //
-  // We must not write to jssp until after the PushCalleeSavedRegisters()
-  // call, since jssp is itself a callee-saved register.
-  __ SetStackPointer(csp);
   __ PushCalleeSavedRegisters();
-  __ Mov(jssp, csp);
-  __ SetStackPointer(jssp);
 
   ProfileEntryHookStub::MaybeCallEntryHook(masm);
 
   // Set up the reserved register for 0.0.
   __ Fmov(fp_zero, 0.0);
+
+  // Initialize the root array register
+  __ InitializeRootRegister();
 
   // Build an entry frame (see layout below).
   StackFrame::Type marker = type();
@@ -527,7 +506,7 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
 
   __ Push(x13, x12, xzr, x10);
   // Set up fp.
-  __ Sub(fp, jssp, EntryFrameConstants::kCallerFPOffset);
+  __ Sub(fp, sp, EntryFrameConstants::kCallerFPOffset);
 
   // Push the JS entry frame marker. Also set js_entry_sp if this is the
   // outermost JS call.
@@ -546,14 +525,15 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
   __ Str(fp, MemOperand(x10));
 
   __ Bind(&done);
-  __ Push(x12);
+  __ Push(x12, padreg);
 
   // The frame set up looks like this:
-  // jssp[0] : JS entry frame marker.
-  // jssp[1] : C entry FP.
-  // jssp[2] : stack frame marker.
-  // jssp[3] : stack frame marker.
-  // jssp[4] : bad frame pointer 0xfff...ff   <- fp points here.
+  // sp[0] : padding.
+  // sp[1] : JS entry frame marker.
+  // sp[2] : C entry FP.
+  // sp[3] : stack frame marker.
+  // sp[4] : stack frame marker.
+  // sp[5] : bad frame pointer 0xFFF...FF   <- fp points here.
 
   // Jump to a faked try block that does the invoke, with a faked catch
   // block that sets the pending exception.
@@ -583,8 +563,7 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
   __ Bind(&invoke);
 
   // Push new stack handler.
-  DCHECK(jssp.Is(__ StackPointer()));
-  static_assert(StackHandlerConstants::kSize == 1 * kPointerSize,
+  static_assert(StackHandlerConstants::kSize == 2 * kPointerSize,
                 "Unexpected offset for StackHandlerConstants::kSize");
   static_assert(StackHandlerConstants::kNextOffset == 0 * kPointerSize,
                 "Unexpected offset for StackHandlerConstants::kNextOffset");
@@ -592,10 +571,15 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
   // Link the current handler as the next handler.
   __ Mov(x11, ExternalReference(IsolateAddressId::kHandlerAddress, isolate()));
   __ Ldr(x10, MemOperand(x11));
-  __ Push(x10);
+  __ Push(padreg, x10);
 
   // Set this new handler as the current one.
-  __ Str(jssp, MemOperand(x11));
+  {
+    UseScratchRegisterScope temps(masm);
+    Register scratch = temps.AcquireX();
+    __ Mov(scratch, sp);
+    __ Str(scratch, MemOperand(x11));
+  }
 
   // If an exception not caught by another handler occurs, this handler
   // returns control to the code after the B(&invoke) above, which
@@ -612,37 +596,32 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
   // x2: receiver.
   // x3: argc.
   // x4: argv.
-
-  if (type() == StackFrame::CONSTRUCT_ENTRY) {
-    __ Call(BUILTIN_CODE(isolate(), JSConstructEntryTrampoline),
-            RelocInfo::CODE_TARGET);
-  } else {
-    __ Call(BUILTIN_CODE(isolate(), JSEntryTrampoline), RelocInfo::CODE_TARGET);
-  }
+  __ Call(EntryTrampoline(), RelocInfo::CODE_TARGET);
 
   // Pop the stack handler and unlink this frame from the handler chain.
   static_assert(StackHandlerConstants::kNextOffset == 0 * kPointerSize,
                 "Unexpected offset for StackHandlerConstants::kNextOffset");
-  __ Pop(x10);
+  __ Pop(x10, padreg);
   __ Mov(x11, ExternalReference(IsolateAddressId::kHandlerAddress, isolate()));
-  __ Drop(StackHandlerConstants::kSize - kXRegSize, kByteSizeInBytes);
+  __ Drop(StackHandlerConstants::kSlotCount - 2);
   __ Str(x10, MemOperand(x11));
 
   __ Bind(&exit);
   // x0 holds the result.
   // The stack pointer points to the top of the entry frame pushed on entry from
   // C++ (at the beginning of this stub):
-  // jssp[0] : JS entry frame marker.
-  // jssp[1] : C entry FP.
-  // jssp[2] : stack frame marker.
-  // jssp[3] : stack frmae marker.
-  // jssp[4] : bad frame pointer 0xfff...ff   <- fp points here.
+  // sp[0] : padding.
+  // sp[1] : JS entry frame marker.
+  // sp[2] : C entry FP.
+  // sp[3] : stack frame marker.
+  // sp[4] : stack frame marker.
+  // sp[5] : bad frame pointer 0xFFF...FF   <- fp points here.
 
   // Check if the current stack frame is marked as the outermost JS frame.
   Label non_outermost_js_2;
   {
     Register c_entry_fp = x11;
-    __ Pop(x10, c_entry_fp);
+    __ PeekPair(x10, c_entry_fp, 1 * kPointerSize);
     __ Cmp(x10, StackFrame::OUTERMOST_JSENTRY_FRAME);
     __ B(ne, &non_outermost_js_2);
     __ Mov(x12, ExternalReference(js_entry_sp));
@@ -656,21 +635,17 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
   }
 
   // Reset the stack to the callee saved registers.
-  __ Drop(-EntryFrameConstants::kCallerFPOffset, kByteSizeInBytes);
+  static_assert(EntryFrameConstants::kFixedFrameSize % (2 * kPointerSize) == 0,
+                "Size of entry frame is not a multiple of 16 bytes");
+  __ Drop(EntryFrameConstants::kFixedFrameSize / kPointerSize);
   // Restore the callee-saved registers and return.
-  DCHECK(jssp.Is(__ StackPointer()));
-  __ Mov(csp, jssp);
-  __ SetStackPointer(csp);
   __ PopCalleeSavedRegisters();
-  // After this point, we must not modify jssp because it is a callee-saved
-  // register which we have just restored.
   __ Ret();
 }
 
-// The entry hook is a "BumpSystemStackPointer" instruction (sub), followed by
-// a "Push lr" instruction, followed by a call.
+// The entry hook is a Push (stp) instruction, followed by a call.
 static const unsigned int kProfileEntryHookCallSize =
-    Assembler::kCallSizeWithRelocation + (2 * kInstructionSize);
+    (1 * kInstructionSize) + Assembler::kCallSizeWithRelocation;
 
 void ProfileEntryHookStub::MaybeCallEntryHookDelayed(TurboAssembler* tasm,
                                                      Zone* zone) {
@@ -748,14 +723,6 @@ void ProfileEntryHookStub::Generate(MacroAssembler* masm) {
 
 
 void DirectCEntryStub::Generate(MacroAssembler* masm) {
-  // When calling into C++ code the stack pointer must be csp.
-  // Therefore this code must use csp for peek/poke operations when the
-  // stub is generated. When the stub is called
-  // (via DirectCEntryStub::GenerateCall), the caller must setup an ExitFrame
-  // and configure the stack pointer *before* doing the call.
-  const Register old_stack_pointer = __ StackPointer();
-  __ SetStackPointer(csp);
-
   // Put return address on the stack (accessible to GC through exit frame pc).
   __ Poke(lr, 0);
   // Call the C++ function.
@@ -764,16 +731,10 @@ void DirectCEntryStub::Generate(MacroAssembler* masm) {
   __ Peek(lr, 0);
   __ AssertFPCRState();
   __ Ret();
-
-  __ SetStackPointer(old_stack_pointer);
 }
 
 void DirectCEntryStub::GenerateCall(MacroAssembler* masm,
                                     Register target) {
-  // Make sure the caller configured the stack pointer (see comment in
-  // DirectCEntryStub::Generate).
-  DCHECK(csp.Is(__ StackPointer()));
-
   intptr_t code =
       reinterpret_cast<intptr_t>(GetCode().location());
   __ Mov(lr, Operand(code, RelocInfo::CODE_TARGET));
@@ -806,7 +767,7 @@ static void CreateArrayDispatch(MacroAssembler* masm,
     }
 
     // If we reached this point there is a problem.
-    __ Abort(kUnexpectedElementsKindInArrayConstructor);
+    __ Abort(AbortReason::kUnexpectedElementsKindInArrayConstructor);
 
   } else {
     UNREACHABLE();
@@ -856,7 +817,7 @@ static void CreateArrayDispatchOneArgument(MacroAssembler* masm,
       __ Ldr(x10, FieldMemOperand(allocation_site, 0));
       __ JumpIfNotRoot(x10, Heap::kAllocationSiteMapRootIndex,
                        &normal_sequence);
-      __ Assert(eq, kExpectedAllocationSite);
+      __ Assert(eq, AbortReason::kExpectedAllocationSite);
     }
 
     // Save the resulting elements kind in type info. We can't just store 'kind'
@@ -884,7 +845,7 @@ static void CreateArrayDispatchOneArgument(MacroAssembler* masm,
     }
 
     // If we reached this point there is a problem.
-    __ Abort(kUnexpectedElementsKindInArrayConstructor);
+    __ Abort(AbortReason::kUnexpectedElementsKindInArrayConstructor);
   } else {
     UNREACHABLE();
   }
@@ -972,7 +933,7 @@ void ArrayConstructorStub::Generate(MacroAssembler* masm) {
     __ JumpIfSmi(x10, &unexpected_map);
     __ JumpIfObjectType(x10, x10, x11, MAP_TYPE, &map_ok);
     __ Bind(&unexpected_map);
-    __ Abort(kUnexpectedInitialMapForArrayFunction);
+    __ Abort(AbortReason::kUnexpectedInitialMapForArrayFunction);
     __ Bind(&map_ok);
 
     // We should either have undefined in the allocation_site register or a
@@ -1069,7 +1030,7 @@ void InternalArrayConstructorStub::Generate(MacroAssembler* masm) {
     __ JumpIfSmi(x10, &unexpected_map);
     __ JumpIfObjectType(x10, x10, x11, MAP_TYPE, &map_ok);
     __ Bind(&unexpected_map);
-    __ Abort(kUnexpectedInitialMapForArrayFunction);
+    __ Abort(AbortReason::kUnexpectedInitialMapForArrayFunction);
     __ Bind(&map_ok);
   }
 
@@ -1085,7 +1046,9 @@ void InternalArrayConstructorStub::Generate(MacroAssembler* masm) {
     Label done;
     __ Cmp(x3, PACKED_ELEMENTS);
     __ Ccmp(x3, HOLEY_ELEMENTS, ZFlag, ne);
-    __ Assert(eq, kInvalidElementsKindForInternalArrayOrInternalPackedArray);
+    __ Assert(
+        eq,
+        AbortReason::kInvalidElementsKindForInternalArrayOrInternalPackedArray);
   }
 
   Label fast_elements_case;
@@ -1202,7 +1165,7 @@ static void CallApiFunctionAndReturn(MacroAssembler* masm,
   if (__ emit_debug_code()) {
     __ Ldr(w1, MemOperand(handle_scope_base, kLevelOffset));
     __ Cmp(w1, level_reg);
-    __ Check(eq, kUnexpectedLevelAfterReturnFromApiCall);
+    __ Check(eq, AbortReason::kUnexpectedLevelAfterReturnFromApiCall);
   }
   __ Sub(level_reg, level_reg, 1);
   __ Str(level_reg, MemOperand(handle_scope_base, kLevelOffset));
@@ -1218,7 +1181,7 @@ static void CallApiFunctionAndReturn(MacroAssembler* masm,
   __ Peek(x21, (spill_offset + 2) * kXRegSize);
   __ Peek(x22, (spill_offset + 3) * kXRegSize);
 
-  __ LeaveExitFrame(false, x1);
+  __ LeaveExitFrame(false, x1, x5);
 
   // Check if the function scheduled an exception.
   __ Mov(x5, ExternalReference::scheduled_exception_address(isolate));
@@ -1288,7 +1251,7 @@ void CallApiCallbackStub::Generate(MacroAssembler* masm) {
 
   // Prepare arguments.
   Register args = x6;
-  __ Mov(args, masm->StackPointer());
+  __ Mov(args, sp);
 
   // Allocate the v8::Arguments structure in the arguments' space, since it's
   // not controlled by GC.
@@ -1372,7 +1335,7 @@ void CallApiGetterStub::Generate(MacroAssembler* masm) {
                 "slots must be a multiple of 2 for stack pointer alignment");
 
   // Load address of v8::PropertyAccessorInfo::args_ array and name handle.
-  __ Mov(x0, masm->StackPointer());  // x0 = Handle<Name>
+  __ Mov(x0, sp);                    // x0 = Handle<Name>
   __ Add(x1, x0, 1 * kPointerSize);  // x1 = v8::PCI::args_
 
   const int kApiStackSpace = 1;

@@ -2,13 +2,11 @@
 
 require('../common');
 
-const assert = require('assert');
 const { test, assert_equals, assert_true, assert_false } =
   require('../common/wpt');
 
-assert.doesNotThrow(() => {
-  global.console = global.console;
-});
+// Assigning to itself should not throw.
+global.console = global.console; // eslint-disable-line no-self-assign
 
 const self = global;
 

@@ -6,7 +6,7 @@
 !tools/doc/node_modules/**/.*
 !.editorconfig
 !.eslintignore
-!.eslintrc.yaml
+!.eslintrc.js
 !.gitattributes
 !.github
 !.gitignore
@@ -14,6 +14,7 @@
 !.mailmap
 !.nycrc
 !.remarkrc
+!.travis.yml
 
 core
 vgcore.*
@@ -68,6 +69,7 @@ ipch/
 
 /config.mk
 /config.gypi
+/config.status
 /config_fips.gypi
 *-nodegyp*
 /gyp-mac-tool
@@ -122,3 +124,11 @@ deps/uv/docs/src/guide/
 
 # do not override V8's .gitignore
 !deps/v8/**
+# ignore VS compiler output unhandled by V8's .gitignore
+deps/v8/gypfiles/Debug/
+deps/v8/gypfiles/Release/
+deps/v8/src/Debug/
+deps/v8/src/Release/
+deps/v8/src/inspector/Debug/
+deps/v8/src/inspector/Release/
+deps/v8/third_party/eu-strip/

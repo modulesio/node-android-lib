@@ -1,23 +1,17 @@
 'use strict';
 const common = require('../common');
 const fixtures = require('../common/fixtures');
-const assert = require('assert');
 const fs = require('fs');
 
-const example = fixtures.path('x.txt');
+// This test ensures that appropriate TypeError is thrown by createReadStream
+// when an argument with invalid type is passed
 
-assert.doesNotThrow(function() {
-  fs.createReadStream(example, undefined);
-});
-assert.doesNotThrow(function() {
-  fs.createReadStream(example, null);
-});
-assert.doesNotThrow(function() {
-  fs.createReadStream(example, 'utf8');
-});
-assert.doesNotThrow(function() {
-  fs.createReadStream(example, { encoding: 'utf8' });
-});
+const example = fixtures.path('x.txt');
+// Should not throw.
+fs.createReadStream(example, undefined);
+fs.createReadStream(example, null);
+fs.createReadStream(example, 'utf8');
+fs.createReadStream(example, { encoding: 'utf8' });
 
 const createReadStreamErr = (path, opt) => {
   common.expectsError(
@@ -34,3 +28,8 @@ createReadStreamErr(example, 123);
 createReadStreamErr(example, 0);
 createReadStreamErr(example, true);
 createReadStreamErr(example, false);
+
+// createReadSteam _should_ throw on NaN
+createReadStreamErr(example, { start: NaN });
+createReadStreamErr(example, { end: NaN });
+createReadStreamErr(example, { start: NaN, end: NaN });

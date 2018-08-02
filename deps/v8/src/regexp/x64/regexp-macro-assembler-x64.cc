@@ -6,7 +6,7 @@
 
 #include "src/regexp/x64/regexp-macro-assembler-x64.h"
 
-#include "src/factory.h"
+#include "src/heap/factory.h"
 #include "src/log.h"
 #include "src/macro-assembler.h"
 #include "src/objects-inl.h"
@@ -551,12 +551,12 @@ bool RegExpMacroAssemblerX64::CheckSpecialCharacterClass(uc16 type,
       Label success;
       __ cmpl(current_character(), Immediate(' '));
       __ j(equal, &success, Label::kNear);
-      // Check range 0x09..0x0d
+      // Check range 0x09..0x0D
       __ leap(rax, Operand(current_character(), -'\t'));
       __ cmpl(rax, Immediate('\r' - '\t'));
       __ j(below_equal, &success, Label::kNear);
       // \u00a0 (NBSP).
-      __ cmpl(rax, Immediate(0x00a0 - '\t'));
+      __ cmpl(rax, Immediate(0x00A0 - '\t'));
       BranchOrBacktrack(not_equal, on_no_match);
       __ bind(&success);
       return true;
@@ -578,39 +578,39 @@ bool RegExpMacroAssemblerX64::CheckSpecialCharacterClass(uc16 type,
     BranchOrBacktrack(below_equal, on_no_match);
     return true;
   case '.': {
-    // Match non-newlines (not 0x0a('\n'), 0x0d('\r'), 0x2028 and 0x2029)
+    // Match non-newlines (not 0x0A('\n'), 0x0D('\r'), 0x2028 and 0x2029)
     __ movl(rax, current_character());
     __ xorp(rax, Immediate(0x01));
-    // See if current character is '\n'^1 or '\r'^1, i.e., 0x0b or 0x0c
-    __ subl(rax, Immediate(0x0b));
-    __ cmpl(rax, Immediate(0x0c - 0x0b));
+    // See if current character is '\n'^1 or '\r'^1, i.e., 0x0B or 0x0C
+    __ subl(rax, Immediate(0x0B));
+    __ cmpl(rax, Immediate(0x0C - 0x0B));
     BranchOrBacktrack(below_equal, on_no_match);
     if (mode_ == UC16) {
       // Compare original value to 0x2028 and 0x2029, using the already
-      // computed (current_char ^ 0x01 - 0x0b). I.e., check for
-      // 0x201d (0x2028 - 0x0b) or 0x201e.
-      __ subl(rax, Immediate(0x2028 - 0x0b));
+      // computed (current_char ^ 0x01 - 0x0B). I.e., check for
+      // 0x201D (0x2028 - 0x0B) or 0x201E.
+      __ subl(rax, Immediate(0x2028 - 0x0B));
       __ cmpl(rax, Immediate(0x2029 - 0x2028));
       BranchOrBacktrack(below_equal, on_no_match);
     }
     return true;
   }
   case 'n': {
-    // Match newlines (0x0a('\n'), 0x0d('\r'), 0x2028 and 0x2029)
+    // Match newlines (0x0A('\n'), 0x0D('\r'), 0x2028 and 0x2029)
     __ movl(rax, current_character());
     __ xorp(rax, Immediate(0x01));
-    // See if current character is '\n'^1 or '\r'^1, i.e., 0x0b or 0x0c
-    __ subl(rax, Immediate(0x0b));
-    __ cmpl(rax, Immediate(0x0c - 0x0b));
+    // See if current character is '\n'^1 or '\r'^1, i.e., 0x0B or 0x0C
+    __ subl(rax, Immediate(0x0B));
+    __ cmpl(rax, Immediate(0x0C - 0x0B));
     if (mode_ == LATIN1) {
       BranchOrBacktrack(above, on_no_match);
     } else {
       Label done;
       BranchOrBacktrack(below_equal, &done);
       // Compare original value to 0x2028 and 0x2029, using the already
-      // computed (current_char ^ 0x01 - 0x0b). I.e., check for
-      // 0x201d (0x2028 - 0x0b) or 0x201e.
-      __ subl(rax, Immediate(0x2028 - 0x0b));
+      // computed (current_char ^ 0x01 - 0x0B). I.e., check for
+      // 0x201D (0x2028 - 0x0B) or 0x201E.
+      __ subl(rax, Immediate(0x2028 - 0x0B));
       __ cmpl(rax, Immediate(0x2029 - 0x2028));
       BranchOrBacktrack(above, on_no_match);
       __ bind(&done);
@@ -623,7 +623,7 @@ bool RegExpMacroAssemblerX64::CheckSpecialCharacterClass(uc16 type,
       __ cmpl(current_character(), Immediate('z'));
       BranchOrBacktrack(above, on_no_match);
     }
-    __ Move(rbx, ExternalReference::re_word_character_map());
+    __ Move(rbx, ExternalReference::re_word_character_map(isolate()));
     DCHECK_EQ(0, word_character_map[0]);  // Character '\0' is not a word char.
     __ testb(Operand(rbx, current_character(), times_1, 0),
              current_character());
@@ -637,7 +637,7 @@ bool RegExpMacroAssemblerX64::CheckSpecialCharacterClass(uc16 type,
       __ cmpl(current_character(), Immediate('z'));
       __ j(above, &done);
     }
-    __ Move(rbx, ExternalReference::re_word_character_map());
+    __ Move(rbx, ExternalReference::re_word_character_map(isolate()));
     DCHECK_EQ(0, word_character_map[0]);  // Character '\0' is not a word char.
     __ testb(Operand(rbx, current_character(), times_1, 0),
              current_character());

@@ -6,7 +6,7 @@ const url = require('url');
 // https://github.com/joyent/node/issues/568
 [
   [undefined, 'undefined'],
-  [null, 'null'],
+  [null, 'object'],
   [true, 'boolean'],
   [false, 'boolean'],
   [0.0, 'number'],
@@ -26,4 +26,12 @@ const url = require('url');
 });
 
 assert.throws(() => { url.parse('http://%E0%A4%A@fail'); },
-              /^URIError: URI malformed$/);
+              (e) => {
+                // The error should be a URIError.
+                if (!(e instanceof URIError))
+                  return false;
+
+                // The error should be from the JS engine and not from Node.js.
+                // JS engine errors do not have the `code` property.
+                return e.code === undefined;
+              });

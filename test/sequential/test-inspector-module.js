@@ -4,7 +4,6 @@ const common = require('../common');
 
 common.skipIfInspectorDisabled();
 
-const assert = require('assert');
 const { Session } = require('inspector');
 
 const session = new Session();
@@ -18,10 +17,8 @@ common.expectsError(
   }
 );
 
-assert.doesNotThrow(() => session.connect());
-
-assert.doesNotThrow(
-  () => session.post('Runtime.evaluate', { expression: '2 + 2' }));
+session.connect();
+session.post('Runtime.evaluate', { expression: '2 + 2' });
 
 [1, {}, [], true, Infinity, undefined].forEach((i) => {
   common.expectsError(
@@ -54,9 +51,10 @@ common.expectsError(
   {
     code: 'ERR_INSPECTOR_ALREADY_CONNECTED',
     type: Error,
-    message: 'The inspector is already connected'
+    message: 'The inspector session is already connected'
   }
 );
 
-assert.doesNotThrow(() => session.disconnect());
-assert.doesNotThrow(() => session.disconnect());
+session.disconnect();
+// Calling disconnect twice should not throw.
+session.disconnect();

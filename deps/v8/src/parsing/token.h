@@ -151,6 +151,7 @@ namespace internal {
                                                                    \
   /* Identifiers (not keywords or future reserved words). */       \
   T(IDENTIFIER, nullptr, 0)                                        \
+  T(PRIVATE_NAME, nullptr, 0)                                      \
                                                                    \
   /* Future reserved words (ECMA-262, section 7.6.1.2). */         \
   T(FUTURE_STRICT_RESERVED_WORD, nullptr, 0)                       \
@@ -187,13 +188,13 @@ namespace internal {
   C(SET, "set", 0)                                                 \
   C(OF, "of", 0)                                                   \
   C(TARGET, "target", 0)                                           \
-  C(SENT, "sent", 0)                                               \
   C(META, "meta", 0)                                               \
   C(AS, "as", 0)                                                   \
   C(FROM, "from", 0)                                               \
   C(NAME, "name", 0)                                               \
   C(PROTO_UNDERSCORED, "__proto__", 0)                             \
   C(CONSTRUCTOR, "constructor", 0)                                 \
+  C(PRIVATE_CONSTRUCTOR, "#constructor", 0)                        \
   C(PROTOTYPE, "prototype", 0)                                     \
   C(EVAL, "eval", 0)                                               \
   C(ARGUMENTS, "arguments", 0)                                     \

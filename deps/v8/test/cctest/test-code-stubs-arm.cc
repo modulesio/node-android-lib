@@ -30,7 +30,7 @@
 #include "src/assembler-inl.h"
 #include "src/base/platform/platform.h"
 #include "src/code-stubs.h"
-#include "src/factory.h"
+#include "src/heap/factory.h"
 #include "src/macro-assembler.h"
 #include "src/objects-inl.h"
 #include "src/simulator.h"
@@ -54,7 +54,7 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
 
   DoubleToIStub stub(isolate, destination_reg);
 
-  byte* start = stub.GetCode()->instruction_start();
+  byte* start = stub.GetCode()->raw_instruction_start();
 
   // Save callee save registers.
   __ Push(r7, r6, r5, r4);
@@ -97,7 +97,7 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
       if (reg != destination_reg) {
         __ ldr(ip, MemOperand(sp, 0));
         __ cmp(reg, ip);
-        __ Assert(eq, kRegisterWasClobbered);
+        __ Assert(eq, AbortReason::kRegisterWasClobbered);
         __ add(sp, sp, Operand(kPointerSize));
       }
     }
@@ -115,7 +115,8 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
 
   CodeDesc desc;
   masm.GetCode(isolate, &desc);
-  Assembler::FlushICache(isolate, buffer, allocated);
+  MakeAssemblerBufferExecutable(buffer, allocated);
+  Assembler::FlushICache(buffer, allocated);
   return (reinterpret_cast<ConvertDToIFunc>(
       reinterpret_cast<intptr_t>(buffer)));
 }
@@ -131,7 +132,8 @@ static Isolate* GetIsolateFrom(LocalContext* context) {
 int32_t RunGeneratedCodeCallWrapper(ConvertDToIFunc func,
                                     double from) {
 #ifdef USE_SIMULATOR
-  return CALL_GENERATED_FP_INT(CcTest::i_isolate(), func, from, 0);
+  return Simulator::current(CcTest::i_isolate())
+      ->CallFP<int32_t>(FUNCTION_ADDR(func), from, 0);
 #else
   return (*func)(from);
 #endif

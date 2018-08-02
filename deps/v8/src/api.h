@@ -9,8 +9,9 @@
 #include "src/contexts.h"
 #include "src/debug/debug-interface.h"
 #include "src/detachable-vector.h"
-#include "src/factory.h"
+#include "src/heap/factory.h"
 #include "src/isolate.h"
+#include "src/objects/js-collection.h"
 
 namespace v8 {
 
@@ -113,6 +114,7 @@ class RegisteredExtension {
   V(Promise, JSPromise)                        \
   V(Primitive, Object)                         \
   V(PrimitiveArray, FixedArray)                \
+  V(BigInt, BigInt)                            \
   V(ScriptOrModule, Script)
 
 class Utils {
@@ -123,7 +125,8 @@ class Utils {
     if (!condition) Utils::ReportApiFailure(location, message);
     return condition;
   }
-  static void ReportOOMFailure(const char* location, bool is_heap_oom);
+  static void ReportOOMFailure(v8::internal::Isolate* isolate,
+                               const char* location, bool is_heap_oom);
 
   static inline Local<Context> ToLocal(
       v8::internal::Handle<v8::internal::Context> obj);
@@ -179,6 +182,10 @@ class Utils {
       v8::internal::Handle<v8::internal::JSTypedArray> obj);
   static inline Local<Float64Array> ToLocalFloat64Array(
       v8::internal::Handle<v8::internal::JSTypedArray> obj);
+  static inline Local<BigInt64Array> ToLocalBigInt64Array(
+      v8::internal::Handle<v8::internal::JSTypedArray> obj);
+  static inline Local<BigUint64Array> ToLocalBigUint64Array(
+      v8::internal::Handle<v8::internal::JSTypedArray> obj);
 
   static inline Local<SharedArrayBuffer> ToLocalShared(
       v8::internal::Handle<v8::internal::JSArrayBuffer> obj);
@@ -197,6 +204,8 @@ class Utils {
       v8::internal::Handle<v8::internal::Object> obj);
   static inline Local<Uint32> Uint32ToLocal(
       v8::internal::Handle<v8::internal::Object> obj);
+  static inline Local<BigInt> ToLocal(
+      v8::internal::Handle<v8::internal::BigInt> obj);
   static inline Local<FunctionTemplate> ToLocal(
       v8::internal::Handle<v8::internal::FunctionTemplateInfo> obj);
   static inline Local<ObjectTemplate> ToLocal(
@@ -328,6 +337,7 @@ MAKE_TO_LOCAL(StackFrameToLocal, StackFrameInfo, StackFrame)
 MAKE_TO_LOCAL(NumberToLocal, Object, Number)
 MAKE_TO_LOCAL(IntegerToLocal, Object, Integer)
 MAKE_TO_LOCAL(Uint32ToLocal, Object, Uint32)
+MAKE_TO_LOCAL(ToLocal, BigInt, BigInt);
 MAKE_TO_LOCAL(ExternalToLocal, JSObject, External)
 MAKE_TO_LOCAL(CallableToLocal, JSReceiver, Function)
 MAKE_TO_LOCAL(ToLocalPrimitive, Object, Primitive)
@@ -404,6 +414,7 @@ class HandleScopeImplementer {
         call_depth_(0),
         microtasks_depth_(0),
         microtasks_suppressions_(0),
+        entered_contexts_count_(0),
         entered_context_count_during_microtasks_(0),
 #ifdef DEBUG
         debug_microtasks_depth_(0),
@@ -530,6 +541,7 @@ class HandleScopeImplementer {
   int call_depth_;
   int microtasks_depth_;
   int microtasks_suppressions_;
+  size_t entered_contexts_count_;
   size_t entered_context_count_during_microtasks_;
 #ifdef DEBUG
   int debug_microtasks_depth_;
@@ -545,10 +557,25 @@ class HandleScopeImplementer {
 
   friend class DeferredHandles;
   friend class DeferredHandleScope;
+  friend class HandleScopeImplementerOffsets;
 
   DISALLOW_COPY_AND_ASSIGN(HandleScopeImplementer);
 };
 
+class HandleScopeImplementerOffsets {
+ public:
+  enum Offsets {
+    kMicrotaskContext = offsetof(HandleScopeImplementer, microtask_context_),
+    kEnteredContexts = offsetof(HandleScopeImplementer, entered_contexts_),
+    kEnteredContextsCount =
+        offsetof(HandleScopeImplementer, entered_contexts_count_),
+    kEnteredContextCountDuringMicrotasks = offsetof(
+        HandleScopeImplementer, entered_context_count_during_microtasks_)
+  };
+
+ private:
+  DISALLOW_IMPLICIT_CONSTRUCTORS(HandleScopeImplementerOffsets);
+};
 
 const int kHandleBlockSize = v8::internal::KB - 2;  // fit in one page
 
@@ -583,9 +610,13 @@ bool HandleScopeImplementer::HasSavedContexts() {
 
 void HandleScopeImplementer::EnterContext(Handle<Context> context) {
   entered_contexts_.push_back(*context);
+  entered_contexts_count_ = entered_contexts_.size();
 }
 
-void HandleScopeImplementer::LeaveContext() { entered_contexts_.pop_back(); }
+void HandleScopeImplementer::LeaveContext() {
+  entered_contexts_.pop_back();
+  entered_contexts_count_ = entered_contexts_.size();
+}
 
 bool HandleScopeImplementer::LastEnteredContextWas(Handle<Context> context) {
   return !entered_contexts_.empty() && entered_contexts_.back() == *context;
@@ -604,7 +635,6 @@ void HandleScopeImplementer::EnterMicrotaskContext(Handle<Context> context) {
 }
 
 void HandleScopeImplementer::LeaveMicrotaskContext() {
-  DCHECK(microtask_context_);
   microtask_context_ = nullptr;
   entered_context_count_during_microtasks_ = 0;
 }

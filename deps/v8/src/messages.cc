@@ -12,7 +12,7 @@
 #include "src/keys.h"
 #include "src/objects/frame-array-inl.h"
 #include "src/string-builder.h"
-#include "src/wasm/wasm-heap.h"
+#include "src/wasm/wasm-code-manager.h"
 #include "src/wasm/wasm-objects.h"
 
 namespace v8 {
@@ -189,25 +189,23 @@ std::unique_ptr<char[]> MessageHandler::GetLocalizedMessage(
 namespace {
 
 Object* EvalFromFunctionName(Isolate* isolate, Handle<Script> script) {
-  if (script->eval_from_shared()->IsUndefined(isolate))
+  if (!script->has_eval_from_shared())
     return isolate->heap()->undefined_value();
 
-  Handle<SharedFunctionInfo> shared(
-      SharedFunctionInfo::cast(script->eval_from_shared()));
+  Handle<SharedFunctionInfo> shared(script->eval_from_shared());
   // Find the name of the function calling eval.
-  if (shared->name()->BooleanValue()) {
-    return shared->name();
+  if (shared->Name()->BooleanValue()) {
+    return shared->Name();
   }
 
   return shared->inferred_name();
 }
 
 Object* EvalFromScript(Isolate* isolate, Handle<Script> script) {
-  if (script->eval_from_shared()->IsUndefined(isolate))
+  if (!script->has_eval_from_shared())
     return isolate->heap()->undefined_value();
 
-  Handle<SharedFunctionInfo> eval_from_shared(
-      SharedFunctionInfo::cast(script->eval_from_shared()));
+  Handle<SharedFunctionInfo> eval_from_shared(script->eval_from_shared());
   return eval_from_shared->script()->IsScript()
              ? eval_from_shared->script()
              : isolate->heap()->undefined_value();
@@ -387,7 +385,7 @@ Handle<Object> JSStackFrame::GetMethodName() {
     return isolate_->factory()->null_value();
   }
 
-  Handle<String> name(function_->shared()->name(), isolate_);
+  Handle<String> name(function_->shared()->Name(), isolate_);
   // ES2015 gives getters and setters name prefixes which must
   // be stripped to find the property name.
   if (name->IsUtf8EqualTo(CStrVector("get "), true) ||
@@ -650,18 +648,10 @@ void WasmStackFrame::FromFrameArray(Isolate* isolate, Handle<FrameArray> array,
   wasm_instance_ = handle(array->WasmInstance(frame_ix), isolate);
   wasm_func_index_ = array->WasmFunctionIndex(frame_ix)->value();
   if (array->IsWasmInterpretedFrame(frame_ix)) {
-    code_ = {};
+    code_ = nullptr;
   } else {
-    code_ =
-        FLAG_wasm_jit_to_native
-            ? WasmCodeWrapper(
-                  wasm_instance_->compiled_module()->GetNativeModule()->GetCode(
-                      wasm_func_index_))
-            : WasmCodeWrapper(handle(
-                  Code::cast(
-                      wasm_instance_->compiled_module()->code_table()->get(
-                          wasm_func_index_)),
-                  isolate));
+    code_ = wasm_instance_->compiled_module()->GetNativeModule()->GetCode(
+        wasm_func_index_);
   }
   offset_ = array->Offset(frame_ix)->value();
 }
@@ -674,10 +664,10 @@ Handle<Object> WasmStackFrame::GetFunction() const {
 
 Handle<Object> WasmStackFrame::GetFunctionName() {
   Handle<Object> name;
-  Handle<WasmCompiledModule> compiled_module(wasm_instance_->compiled_module(),
-                                             isolate_);
-  if (!WasmCompiledModule::GetFunctionNameOrNull(isolate_, compiled_module,
-                                                 wasm_func_index_)
+  Handle<WasmSharedModuleData> shared(
+      wasm_instance_->compiled_module()->shared(), isolate_);
+  if (!WasmSharedModuleData::GetFunctionNameOrNull(isolate_, shared,
+                                                   wasm_func_index_)
            .ToHandle(&name)) {
     name = isolate_->factory()->null_value();
   }
@@ -687,12 +677,13 @@ Handle<Object> WasmStackFrame::GetFunctionName() {
 MaybeHandle<String> WasmStackFrame::ToString() {
   IncrementalStringBuilder builder(isolate_);
 
-  Handle<WasmCompiledModule> compiled_module(wasm_instance_->compiled_module(),
-                                             isolate_);
+  Handle<WasmSharedModuleData> shared(
+      wasm_instance_->compiled_module()->shared(), isolate_);
   MaybeHandle<String> module_name =
-      WasmCompiledModule::GetModuleNameOrNull(isolate_, compiled_module);
-  MaybeHandle<String> function_name = WasmCompiledModule::GetFunctionNameOrNull(
-      isolate_, compiled_module, wasm_func_index_);
+      WasmSharedModuleData::GetModuleNameOrNull(isolate_, shared);
+  MaybeHandle<String> function_name =
+      WasmSharedModuleData::GetFunctionNameOrNull(isolate_, shared,
+                                                  wasm_func_index_);
   bool has_name = !module_name.is_null() || !function_name.is_null();
   if (has_name) {
     if (module_name.is_null()) {
@@ -724,11 +715,8 @@ MaybeHandle<String> WasmStackFrame::ToString() {
 int WasmStackFrame::GetPosition() const {
   return IsInterpreted()
              ? offset_
-             : (code_.IsCodeObject()
-                    ? Handle<AbstractCode>::cast(code_.GetCode())
-                          ->SourcePosition(offset_)
-                    : FrameSummary::WasmCompiledFrameSummary::
-                          GetWasmSourcePosition(code_.GetWasmCode(), offset_));
+             : FrameSummary::WasmCompiledFrameSummary::GetWasmSourcePosition(
+                   code_, offset_);
 }
 
 Handle<Object> WasmStackFrame::Null() const {
@@ -738,7 +726,8 @@ Handle<Object> WasmStackFrame::Null() const {
 bool WasmStackFrame::HasScript() const { return true; }
 
 Handle<Script> WasmStackFrame::GetScript() const {
-  return handle(wasm_instance_->compiled_module()->script(), isolate_);
+  return handle(wasm_instance_->compiled_module()->shared()->script(),
+                isolate_);
 }
 
 AsmJsWasmStackFrame::AsmJsWasmStackFrame() {}
@@ -762,13 +751,15 @@ Handle<Object> AsmJsWasmStackFrame::GetFunction() const {
 }
 
 Handle<Object> AsmJsWasmStackFrame::GetFileName() {
-  Handle<Script> script(wasm_instance_->compiled_module()->script(), isolate_);
+  Handle<Script> script(wasm_instance_->compiled_module()->shared()->script(),
+                        isolate_);
   DCHECK(script->IsUserJavaScript());
   return handle(script->name(), isolate_);
 }
 
 Handle<Object> AsmJsWasmStackFrame::GetScriptNameOrSourceUrl() {
-  Handle<Script> script(wasm_instance_->compiled_module()->script(), isolate_);
+  Handle<Script> script(wasm_instance_->compiled_module()->shared()->script(),
+                        isolate_);
   DCHECK_EQ(Script::TYPE_NORMAL, script->type());
   return ScriptNameOrSourceUrl(script, isolate_);
 }
@@ -776,28 +767,28 @@ Handle<Object> AsmJsWasmStackFrame::GetScriptNameOrSourceUrl() {
 int AsmJsWasmStackFrame::GetPosition() const {
   DCHECK_LE(0, offset_);
   int byte_offset =
-      code_.IsCodeObject()
-          ? Handle<AbstractCode>::cast(code_.GetCode())->SourcePosition(offset_)
-          : FrameSummary::WasmCompiledFrameSummary::GetWasmSourcePosition(
-                code_.GetWasmCode(), offset_);
-  Handle<WasmCompiledModule> compiled_module(wasm_instance_->compiled_module(),
-                                             isolate_);
+      FrameSummary::WasmCompiledFrameSummary::GetWasmSourcePosition(code_,
+                                                                    offset_);
+  Handle<WasmSharedModuleData> shared(
+      wasm_instance_->compiled_module()->shared(), isolate_);
   DCHECK_LE(0, byte_offset);
-  return WasmCompiledModule::GetSourcePosition(
-      compiled_module, wasm_func_index_, static_cast<uint32_t>(byte_offset),
+  return WasmSharedModuleData::GetSourcePosition(
+      shared, wasm_func_index_, static_cast<uint32_t>(byte_offset),
       is_at_number_conversion_);
 }
 
 int AsmJsWasmStackFrame::GetLineNumber() {
   DCHECK_LE(0, GetPosition());
-  Handle<Script> script(wasm_instance_->compiled_module()->script(), isolate_);
+  Handle<Script> script(wasm_instance_->compiled_module()->shared()->script(),
+                        isolate_);
   DCHECK(script->IsUserJavaScript());
   return Script::GetLineNumber(script, GetPosition()) + 1;
 }
 
 int AsmJsWasmStackFrame::GetColumnNumber() {
   DCHECK_LE(0, GetPosition());
-  Handle<Script> script(wasm_instance_->compiled_module()->script(), isolate_);
+  Handle<Script> script(wasm_instance_->compiled_module()->shared()->script(),
+                        isolate_);
   DCHECK(script->IsUserJavaScript());
   return Script::GetColumnNumber(script, GetPosition()) + 1;
 }

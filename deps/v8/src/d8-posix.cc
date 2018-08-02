@@ -31,16 +31,16 @@ static int LengthWithoutIncompleteUtf8(char* buffer, int len) {
   static const int kUtf8SingleByteMask = 0x80;
   static const int kUtf8SingleByteValue = 0x00;
   // 2-byte encoding.
-  static const int kUtf8TwoByteMask = 0xe0;
-  static const int kUtf8TwoByteValue = 0xc0;
+  static const int kUtf8TwoByteMask = 0xE0;
+  static const int kUtf8TwoByteValue = 0xC0;
   // 3-byte encoding.
-  static const int kUtf8ThreeByteMask = 0xf0;
-  static const int kUtf8ThreeByteValue = 0xe0;
+  static const int kUtf8ThreeByteMask = 0xF0;
+  static const int kUtf8ThreeByteValue = 0xE0;
   // 4-byte encoding.
-  static const int kUtf8FourByteMask = 0xf8;
-  static const int kUtf8FourByteValue = 0xf0;
+  static const int kUtf8FourByteMask = 0xF8;
+  static const int kUtf8FourByteValue = 0xF0;
   // Subsequent bytes of a multi-byte encoding.
-  static const int kMultiByteMask = 0xc0;
+  static const int kMultiByteMask = 0xC0;
   static const int kMultiByteValue = 0x80;
   int multi_byte_bytes_seen = 0;
   while (answer > 0) {
@@ -361,8 +361,8 @@ static Local<Value> GetStdout(Isolate* isolate, int child_fd,
 // We're disabling usage of waitid in Mac OS X because it doesn't work for us:
 // a parent process hangs on waiting while a child process is already a zombie.
 // See http://code.google.com/p/v8/issues/detail?id=401.
-#if defined(WNOWAIT) && !defined(ANDROID) && !defined(__APPLE__) \
-    && !defined(__NetBSD__)
+#if defined(WNOWAIT) && !defined(ANDROID) && !defined(__APPLE__) && \
+    !defined(__NetBSD__) && !defined(__Fuchsia__)
 #if !defined(__FreeBSD__)
 #define HAS_WAITID 1
 #endif
@@ -872,14 +872,6 @@ void Shell::AddOSMethods(Isolate* isolate, Local<ObjectTemplate> os_templ) {
   os_templ->Set(String::NewFromUtf8(isolate, "rmdir", NewStringType::kNormal)
                     .ToLocalChecked(),
                 FunctionTemplate::New(isolate, RemoveDirectory));
-}
-
-void Shell::Exit(int exit_code) {
-  // Use _exit instead of exit to avoid races between isolate
-  // threads and static destructors.
-  fflush(stdout);
-  fflush(stderr);
-  _exit(exit_code);
 }
 
 }  // namespace v8

@@ -4,11 +4,11 @@ const common = require('../common');
 const Readable = require('stream').Readable;
 
 const bench = common.createBenchmark(main, {
-  n: [100e1]
+  n: [1e3]
 });
 
 function main({ n }) {
-  const b = new Buffer(32);
+  const b = Buffer.alloc(32);
   const s = new Readable();
   function noop() {}
   s._read = noop;

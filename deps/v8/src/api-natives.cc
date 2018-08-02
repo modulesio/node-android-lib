@@ -285,10 +285,10 @@ MaybeHandle<JSObject> ProbeInstantiationsCache(Isolate* isolate,
   } else if (caching_mode == CachingMode::kUnlimited ||
              (serial_number <=
               TemplateInfo::kSlowTemplateInstantiationsCacheSize)) {
-    Handle<NumberDictionary> slow_cache =
+    Handle<SimpleNumberDictionary> slow_cache =
         isolate->slow_template_instantiations_cache();
     int entry = slow_cache->FindEntry(serial_number);
-    if (entry == NumberDictionary::kNotFound) {
+    if (entry == SimpleNumberDictionary::kNotFound) {
       return MaybeHandle<JSObject>();
     }
     return handle(JSObject::cast(slow_cache->ValueAt(entry)), isolate);
@@ -313,9 +313,9 @@ void CacheTemplateInstantiation(Isolate* isolate, int serial_number,
   } else if (caching_mode == CachingMode::kUnlimited ||
              (serial_number <=
               TemplateInfo::kSlowTemplateInstantiationsCacheSize)) {
-    Handle<NumberDictionary> cache =
+    Handle<SimpleNumberDictionary> cache =
         isolate->slow_template_instantiations_cache();
-    auto new_cache = NumberDictionary::Set(cache, serial_number, object);
+    auto new_cache = SimpleNumberDictionary::Set(cache, serial_number, object);
     if (*new_cache != *cache) {
       isolate->native_context()->set_slow_template_instantiations_cache(
           *new_cache);
@@ -334,11 +334,11 @@ void UncacheTemplateInstantiation(Isolate* isolate, int serial_number,
   } else if (caching_mode == CachingMode::kUnlimited ||
              (serial_number <=
               TemplateInfo::kSlowTemplateInstantiationsCacheSize)) {
-    Handle<NumberDictionary> cache =
+    Handle<SimpleNumberDictionary> cache =
         isolate->slow_template_instantiations_cache();
     int entry = cache->FindEntry(serial_number);
-    DCHECK_NE(NumberDictionary::kNotFound, entry);
-    cache = NumberDictionary::DeleteEntry(cache, entry);
+    DCHECK_NE(SimpleNumberDictionary::kNotFound, entry);
+    cache = SimpleNumberDictionary::DeleteEntry(cache, entry);
     isolate->native_context()->set_slow_template_instantiations_cache(*cache);
   }
 }
@@ -626,7 +626,7 @@ Handle<JSFunction> ApiNatives::CreateApiFunction(
       FunctionTemplateInfo::GetOrCreateSharedFunctionInfo(isolate, obj,
                                                           maybe_name);
   // To simplify things, API functions always have shared name.
-  DCHECK(shared->has_shared_name());
+  DCHECK(shared->HasSharedName());
 
   Handle<JSFunction> result =
       isolate->factory()->NewFunctionFromSharedFunctionInfo(
@@ -705,7 +705,7 @@ Handle<JSFunction> ApiNatives::CreateApiFunction(
     // that is undetectable but not callable, we need to update the types.h
     // to allow encoding this.
     CHECK(!obj->instance_call_handler()->IsUndefined(isolate));
-    map->set_is_undetectable();
+    map->set_is_undetectable(true);
   }
 
   // Mark as needs_access_check if needed.
@@ -716,20 +716,19 @@ Handle<JSFunction> ApiNatives::CreateApiFunction(
 
   // Set interceptor information in the map.
   if (!obj->named_property_handler()->IsUndefined(isolate)) {
-    map->set_has_named_interceptor();
+    map->set_has_named_interceptor(true);
     map->set_may_have_interesting_symbols(true);
   }
   if (!obj->indexed_property_handler()->IsUndefined(isolate)) {
-    map->set_has_indexed_interceptor();
+    map->set_has_indexed_interceptor(true);
   }
 
   // Mark instance as callable in the map.
   if (!obj->instance_call_handler()->IsUndefined(isolate)) {
-    map->set_is_callable();
-    map->set_is_constructor(true);
+    map->set_is_callable(true);
   }
 
-  if (immutable_proto) map->set_immutable_proto(true);
+  if (immutable_proto) map->set_is_immutable_proto(true);
 
   return result;
 }

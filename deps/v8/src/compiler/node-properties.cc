@@ -12,6 +12,7 @@
 #include "src/compiler/simplified-operator.h"
 #include "src/compiler/verifier.h"
 #include "src/handles-inl.h"
+#include "src/zone/zone-handle-set.h"
 
 namespace v8 {
 namespace internal {
@@ -462,6 +463,20 @@ NodeProperties::InferReceiverMapsResult NodeProperties::InferReceiverMaps(
         if (IsSame(receiver, effect)) receiver = GetValueInput(effect, 0);
         break;
       }
+      case IrOpcode::kEffectPhi: {
+        Node* control = GetControlInput(effect);
+        if (control->opcode() != IrOpcode::kLoop) {
+          DCHECK(control->opcode() == IrOpcode::kDead ||
+                 control->opcode() == IrOpcode::kMerge);
+          return kNoReceiverMaps;
+        }
+
+        // Continue search for receiver map outside the loop. Since operations
+        // inside the loop may change the map, the result is unreliable.
+        effect = GetEffectInput(effect, 0);
+        result = kUnreliableReceiverMaps;
+        continue;
+      }
       default: {
         DCHECK_EQ(1, effect->op()->EffectOutputCount());
         if (effect->op()->EffectInputCount() != 1) {
@@ -485,6 +500,40 @@ NodeProperties::InferReceiverMapsResult NodeProperties::InferReceiverMaps(
     DCHECK_EQ(1, effect->op()->EffectInputCount());
     effect = NodeProperties::GetEffectInput(effect);
   }
+}
+
+// static
+MaybeHandle<Map> NodeProperties::GetMapWitness(Node* node) {
+  ZoneHandleSet<Map> maps;
+  Node* receiver = NodeProperties::GetValueInput(node, 1);
+  Node* effect = NodeProperties::GetEffectInput(node);
+  NodeProperties::InferReceiverMapsResult result =
+      NodeProperties::InferReceiverMaps(receiver, effect, &maps);
+  if (result == NodeProperties::kReliableReceiverMaps && maps.size() == 1) {
+    return maps[0];
+  }
+  return MaybeHandle<Map>();
+}
+
+// static
+bool NodeProperties::HasInstanceTypeWitness(Node* receiver, Node* effect,
+                                            InstanceType instance_type) {
+  ZoneHandleSet<Map> receiver_maps;
+  NodeProperties::InferReceiverMapsResult result =
+      NodeProperties::InferReceiverMaps(receiver, effect, &receiver_maps);
+  switch (result) {
+    case NodeProperties::kUnreliableReceiverMaps:
+    case NodeProperties::kReliableReceiverMaps:
+      DCHECK_NE(0, receiver_maps.size());
+      for (size_t i = 0; i < receiver_maps.size(); ++i) {
+        if (receiver_maps[i]->instance_type() != instance_type) return false;
+      }
+      return true;
+
+    case NodeProperties::kNoReceiverMaps:
+      return false;
+  }
+  UNREACHABLE();
 }
 
 // static
@@ -538,19 +587,18 @@ bool NodeProperties::CanBePrimitive(Node* receiver, Node* effect) {
 bool NodeProperties::CanBeNullOrUndefined(Node* receiver, Node* effect) {
   if (CanBePrimitive(receiver, effect)) {
     switch (receiver->opcode()) {
-      case IrOpcode::kCheckSmi:
-      case IrOpcode::kCheckNumber:
-      case IrOpcode::kCheckSymbol:
-      case IrOpcode::kCheckString:
-      case IrOpcode::kCheckSeqString:
       case IrOpcode::kCheckInternalizedString:
-      case IrOpcode::kToBoolean:
+      case IrOpcode::kCheckNumber:
+      case IrOpcode::kCheckSmi:
+      case IrOpcode::kCheckString:
+      case IrOpcode::kCheckSymbol:
       case IrOpcode::kJSToInteger:
       case IrOpcode::kJSToLength:
       case IrOpcode::kJSToName:
       case IrOpcode::kJSToNumber:
       case IrOpcode::kJSToNumeric:
       case IrOpcode::kJSToString:
+      case IrOpcode::kToBoolean:
         return false;
       case IrOpcode::kHeapConstant: {
         Handle<HeapObject> value = HeapObjectMatcher(receiver).Value();

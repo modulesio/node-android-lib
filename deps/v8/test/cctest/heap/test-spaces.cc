@@ -28,7 +28,7 @@
 #include <stdlib.h>
 
 #include "src/base/platform/platform.h"
-#include "src/factory.h"
+#include "src/heap/factory.h"
 #include "src/heap/spaces-inl.h"
 #include "src/objects-inl.h"
 #include "src/snapshot/snapshot.h"
@@ -80,12 +80,10 @@ class TestCodeRangeScope {
   DISALLOW_COPY_AND_ASSIGN(TestCodeRangeScope);
 };
 
-static void VerifyMemoryChunk(Isolate* isolate,
-                              Heap* heap,
-                              CodeRange* code_range,
-                              size_t reserve_area_size,
-                              size_t commit_area_size,
-                              Executability executable) {
+static void VerifyMemoryChunk(Isolate* isolate, Heap* heap,
+                              CodeRange* code_range, size_t reserve_area_size,
+                              size_t commit_area_size, Executability executable,
+                              Space* space) {
   MemoryAllocator* memory_allocator = new MemoryAllocator(isolate);
   CHECK(memory_allocator->SetUp(heap->MaxReserved(), 0));
   {
@@ -99,16 +97,15 @@ static void VerifyMemoryChunk(Isolate* isolate,
         (executable == EXECUTABLE) ? MemoryAllocator::CodePageGuardSize() : 0;
 
     MemoryChunk* memory_chunk = memory_allocator->AllocateChunk(
-        reserve_area_size, commit_area_size, executable, nullptr);
+        reserve_area_size, commit_area_size, executable, space);
     size_t alignment = code_range != nullptr && code_range->valid()
                            ? MemoryChunk::kAlignment
-                           : base::OS::CommitPageSize();
+                           : CommitPageSize();
     size_t reserved_size =
         ((executable == EXECUTABLE))
             ? RoundUp(header_size + guard_size + reserve_area_size + guard_size,
                       alignment)
-            : RoundUp(header_size + reserve_area_size,
-                      base::OS::CommitPageSize());
+            : RoundUp(header_size + reserve_area_size, CommitPageSize());
     CHECK(memory_chunk->size() == reserved_size);
     CHECK(memory_chunk->area_start() <
           memory_chunk->address() + memory_chunk->size());
@@ -179,36 +176,22 @@ TEST(MemoryChunk) {
     const size_t code_range_size = 32 * MB;
     if (!code_range->SetUp(code_range_size)) return;
 
-    VerifyMemoryChunk(isolate,
-                      heap,
-                      code_range,
-                      reserve_area_size,
-                      initial_commit_area_size,
-                      EXECUTABLE);
+    VerifyMemoryChunk(isolate, heap, code_range, reserve_area_size,
+                      initial_commit_area_size, EXECUTABLE, heap->code_space());
 
-    VerifyMemoryChunk(isolate,
-                      heap,
-                      code_range,
-                      reserve_area_size,
-                      initial_commit_area_size,
-                      NOT_EXECUTABLE);
+    VerifyMemoryChunk(isolate, heap, code_range, reserve_area_size,
+                      initial_commit_area_size, NOT_EXECUTABLE,
+                      heap->old_space());
     delete code_range;
 
     // Without a valid CodeRange, i.e., omitting SetUp.
     code_range = new CodeRange(isolate);
-    VerifyMemoryChunk(isolate,
-                      heap,
-                      code_range,
-                      reserve_area_size,
-                      initial_commit_area_size,
-                      EXECUTABLE);
+    VerifyMemoryChunk(isolate, heap, code_range, reserve_area_size,
+                      initial_commit_area_size, EXECUTABLE, heap->code_space());
 
-    VerifyMemoryChunk(isolate,
-                      heap,
-                      code_range,
-                      reserve_area_size,
-                      initial_commit_area_size,
-                      NOT_EXECUTABLE);
+    VerifyMemoryChunk(isolate, heap, code_range, reserve_area_size,
+                      initial_commit_area_size, NOT_EXECUTABLE,
+                      heap->old_space());
     delete code_range;
   }
 }
@@ -231,7 +214,6 @@ TEST(MemoryAllocator) {
         NOT_EXECUTABLE);
 
     first_page->InsertAfter(faked_space.anchor()->prev_page());
-    CHECK(Page::IsValid(first_page));
     CHECK(first_page->next_page() == faked_space.anchor());
     total_pages++;
 
@@ -243,7 +225,6 @@ TEST(MemoryAllocator) {
     Page* other = memory_allocator->AllocatePage(
         faked_space.AreaSize(), static_cast<PagedSpace*>(&faked_space),
         NOT_EXECUTABLE);
-    CHECK(Page::IsValid(other));
     total_pages++;
     other->InsertAfter(first_page);
     int page_count = 0;
@@ -254,7 +235,7 @@ TEST(MemoryAllocator) {
     CHECK(total_pages == page_count);
 
     Page* second_page = first_page->next_page();
-    CHECK(Page::IsValid(second_page));
+    CHECK_NOT_NULL(second_page);
 
     // OldSpace's destructor will tear down the space and free up all pages.
   }
@@ -384,8 +365,9 @@ TEST(SizeOfInitialHeap) {
   // Freshly initialized VM gets by with the snapshot size (which is below
   // kMaxInitialSizePerSpace per space).
   Heap* heap = isolate->heap();
-  int page_count[LAST_PAGED_SPACE + 1] = {0, 0, 0, 0};
-  for (int i = FIRST_PAGED_SPACE; i <= LAST_PAGED_SPACE; i++) {
+  int page_count[LAST_GROWABLE_PAGED_SPACE + 1] = {0, 0, 0, 0};
+  for (int i = FIRST_GROWABLE_PAGED_SPACE; i <= LAST_GROWABLE_PAGED_SPACE;
+       i++) {
     // Debug code can be very large, so skip CODE_SPACE if we are generating it.
     if (i == CODE_SPACE && i::FLAG_debug_code) continue;
 
@@ -397,7 +379,8 @@ TEST(SizeOfInitialHeap) {
   // Executing the empty script gets by with the same number of pages, i.e.,
   // requires no extra space.
   CompileRun("/*empty*/");
-  for (int i = FIRST_PAGED_SPACE; i <= LAST_PAGED_SPACE; i++) {
+  for (int i = FIRST_GROWABLE_PAGED_SPACE; i <= LAST_GROWABLE_PAGED_SPACE;
+       i++) {
     // Skip CODE_SPACE, since we had to generate code even for an empty script.
     if (i == CODE_SPACE) continue;
     CHECK_EQ(page_count[i], isolate->heap()->paged_space(i)->CountTotalPages());
@@ -442,7 +425,7 @@ class Observer : public AllocationObserver {
   explicit Observer(intptr_t step_size)
       : AllocationObserver(step_size), count_(0) {}
 
-  void Step(int bytes_allocated, Address, size_t) override { count_++; }
+  void Step(int bytes_allocated, Address addr, size_t) override { count_++; }
 
   int count() const { return count_; }
 
@@ -621,6 +604,47 @@ HEAP_TEST(Regress777177) {
   old_space->RemoveAllocationObserver(&observer);
 }
 
+HEAP_TEST(Regress791582) {
+  CcTest::InitializeVM();
+  Isolate* isolate = CcTest::i_isolate();
+  Heap* heap = isolate->heap();
+  HandleScope scope(isolate);
+  NewSpace* new_space = heap->new_space();
+  if (new_space->TotalCapacity() < new_space->MaximumCapacity()) {
+    new_space->Grow();
+  }
+
+  int until_page_end = static_cast<int>(new_space->limit() - new_space->top());
+
+  if (until_page_end % kPointerSize != 0) {
+    // The test works if the size of allocation area size is a multiple of
+    // pointer size. This is usually the case unless some allocation observer
+    // is already active (e.g. incremental marking observer).
+    return;
+  }
+
+  Observer observer(128);
+  new_space->AddAllocationObserver(&observer);
+
+  {
+    AllocationResult result =
+        new_space->AllocateRaw(until_page_end, kWordAligned);
+    HeapObject* obj = result.ToObjectChecked();
+    heap->CreateFillerObjectAt(obj->address(), until_page_end,
+                               ClearRecordedSlots::kNo);
+    // Simulate allocation folding moving the top pointer back.
+    *new_space->allocation_top_address() = obj->address();
+  }
+
+  {
+    // This triggers assert in crbug.com/791582
+    AllocationResult result = new_space->AllocateRaw(256, kWordAligned);
+    HeapObject* obj = result.ToObjectChecked();
+    heap->CreateFillerObjectAt(obj->address(), 256, ClearRecordedSlots::kNo);
+  }
+  new_space->RemoveAllocationObserver(&observer);
+}
+
 TEST(ShrinkPageToHighWaterMarkFreeSpaceEnd) {
   FLAG_stress_incremental_marking = false;
   CcTest::InitializeVM();
@@ -636,8 +660,8 @@ TEST(ShrinkPageToHighWaterMarkFreeSpaceEnd) {
 
   // Reset space so high water mark is consistent.
   PagedSpace* old_space = CcTest::heap()->old_space();
+  old_space->FreeLinearAllocationArea();
   old_space->ResetFreeList();
-  old_space->EmptyAllocationInfo();
 
   HeapObject* filler =
       HeapObject::FromAddress(array->address() + array->Size());
@@ -645,7 +669,7 @@ TEST(ShrinkPageToHighWaterMarkFreeSpaceEnd) {
   size_t shrunk = old_space->ShrinkPageToHighWaterMark(page);
   size_t should_have_shrunk =
       RoundDown(static_cast<size_t>(Page::kAllocatableMemory - array->Size()),
-                base::OS::CommitPageSize());
+                CommitPageSize());
   CHECK_EQ(should_have_shrunk, shrunk);
 }
 
@@ -665,7 +689,7 @@ TEST(ShrinkPageToHighWaterMarkNoFiller) {
   // Reset space so high water mark and fillers are consistent.
   PagedSpace* old_space = CcTest::heap()->old_space();
   old_space->ResetFreeList();
-  old_space->EmptyAllocationInfo();
+  old_space->FreeLinearAllocationArea();
 
   size_t shrunk = old_space->ShrinkPageToHighWaterMark(page);
   CHECK_EQ(0u, shrunk);
@@ -687,8 +711,8 @@ TEST(ShrinkPageToHighWaterMarkOneWordFiller) {
 
   // Reset space so high water mark and fillers are consistent.
   PagedSpace* old_space = CcTest::heap()->old_space();
+  old_space->FreeLinearAllocationArea();
   old_space->ResetFreeList();
-  old_space->EmptyAllocationInfo();
 
   HeapObject* filler =
       HeapObject::FromAddress(array->address() + array->Size());
@@ -714,8 +738,8 @@ TEST(ShrinkPageToHighWaterMarkTwoWordFiller) {
 
   // Reset space so high water mark and fillers are consistent.
   PagedSpace* old_space = CcTest::heap()->old_space();
+  old_space->FreeLinearAllocationArea();
   old_space->ResetFreeList();
-  old_space->EmptyAllocationInfo();
 
   HeapObject* filler =
       HeapObject::FromAddress(array->address() + array->Size());

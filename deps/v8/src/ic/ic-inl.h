@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef V8_IC_INL_H_
-#define V8_IC_INL_H_
+#ifndef V8_IC_IC_INL_H_
+#define V8_IC_IC_INL_H_
 
 #include "src/ic/ic.h"
 
@@ -41,8 +41,7 @@ Address IC::raw_constant_pool() const {
 
 
 bool IC::IsHandler(Object* object) {
-  return (object->IsSmi() && (object != nullptr)) || object->IsTuple2() ||
-         object->IsTuple3() || object->IsFixedArrayExact() ||
+  return (object->IsSmi() && (object != nullptr)) || object->IsDataHandler() ||
          object->IsWeakCell() || object->IsCode();
 }
 
@@ -60,4 +59,4 @@ bool IC::AddressIsDeoptimizedCode(Isolate* isolate, Address address) {
 }  // namespace internal
 }  // namespace v8
 
-#endif  // V8_IC_INL_H_
+#endif  // V8_IC_IC_INL_H_

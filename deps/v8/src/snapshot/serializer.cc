@@ -10,6 +10,7 @@
 #include "src/objects/map.h"
 #include "src/snapshot/builtin-serializer-allocator.h"
 #include "src/snapshot/natives.h"
+#include "src/snapshot/snapshot.h"
 
 namespace v8 {
 namespace internal {
@@ -92,8 +93,9 @@ bool Serializer<AllocatorT>::MustBeDeferred(HeapObject* object) {
 }
 
 template <class AllocatorT>
-void Serializer<AllocatorT>::VisitRootPointers(Root root, Object** start,
-                                               Object** end) {
+void Serializer<AllocatorT>::VisitRootPointers(Root root,
+                                               const char* description,
+                                               Object** start, Object** end) {
   // Builtins and bytecode handlers are serialized in a separate pass by the
   // BuiltinSerializer.
   if (root == Root::kBuiltins || root == Root::kDispatchTable) return;
@@ -184,7 +186,7 @@ bool Serializer<AllocatorT>::SerializeBackReference(HeapObject* obj,
 template <class AllocatorT>
 bool Serializer<AllocatorT>::SerializeBuiltinReference(
     HeapObject* obj, HowToCode how_to_code, WhereToPoint where_to_point,
-    int skip, BuiltinReferenceSerializationMode mode) {
+    int skip) {
   if (!obj->IsCode()) return false;
 
   Code* code = Code::cast(obj);
@@ -195,11 +197,6 @@ bool Serializer<AllocatorT>::SerializeBuiltinReference(
          (how_to_code == kFromCode));
   DCHECK_LT(builtin_index, Builtins::builtin_count);
   DCHECK_LE(0, builtin_index);
-
-  if (mode == kCanonicalizeCompileLazy &&
-      code->is_interpreter_trampoline_builtin()) {
-    builtin_index = static_cast<int>(Builtins::kCompileLazy);
-  }
 
   if (FLAG_trace_serializer) {
     PrintF(" Encoding builtin reference: %s\n",
@@ -283,7 +280,7 @@ void Serializer<AllocatorT>::PutAttachedReference(SerializerReference reference,
 
 template <class AllocatorT>
 int Serializer<AllocatorT>::PutAlignmentPrefix(HeapObject* object) {
-  AllocationAlignment alignment = object->RequiredAlignment();
+  AllocationAlignment alignment = HeapObject::RequiredAlignment(object->map());
   if (alignment != kWordAligned) {
     DCHECK(1 <= alignment && alignment <= 3);
     byte prefix = (kAlignmentPrefix - 1) + alignment;
@@ -401,9 +398,7 @@ void Serializer<AllocatorT>::ObjectSerializer::SerializeJSTypedArray() {
       FixedTypedArrayBase::cast(typed_array->elements());
 
   if (!typed_array->WasNeutered()) {
-    bool off_heap = elements->base_pointer() == nullptr;
-
-    if (off_heap) {
+    if (!typed_array->is_on_heap()) {
       // Explicitly serialize the backing store now.
       JSArrayBuffer* buffer = JSArrayBuffer::cast(typed_array->buffer());
       CHECK(buffer->byte_length()->IsSmi());
@@ -449,18 +444,30 @@ void Serializer<AllocatorT>::ObjectSerializer::SerializeJSArrayBuffer() {
     buffer->set_backing_store(Smi::FromInt(ref));
   }
   SerializeObject();
+  buffer->set_backing_store(backing_store);
 }
 
 template <class AllocatorT>
 void Serializer<AllocatorT>::ObjectSerializer::SerializeExternalString() {
   Heap* heap = serializer_->isolate()->heap();
+  // For external strings with known resources, we replace the resource field
+  // with the encoded external reference, which we restore upon deserialize.
+  // for native native source code strings, we replace the resource field
+  // with the native source id.
+  // For the rest we serialize them to look like ordinary sequential strings.
   if (object_->map() != heap->native_source_string_map()) {
-    // Usually we cannot recreate resources for external strings. To work
-    // around this, external strings are serialized to look like ordinary
-    // sequential strings.
-    // The exception are native source code strings, since we can recreate
-    // their resources.
-    SerializeExternalStringAsSequentialString();
+    ExternalString* string = ExternalString::cast(object_);
+    Address resource = string->resource_as_address();
+    ExternalReferenceEncoder::Value reference;
+    if (serializer_->external_reference_encoder_.TryEncode(resource).To(
+            &reference)) {
+      DCHECK(reference.is_from_api());
+      string->set_uint32_as_resource(reference.index());
+      SerializeObject();
+      string->set_address_as_resource(resource);
+    } else {
+      SerializeExternalStringAsSequentialString();
+    }
   } else {
     ExternalOneByteString* string = ExternalOneByteString::cast(object_);
     DCHECK(string->is_short());
@@ -658,12 +665,12 @@ void Serializer<AllocatorT>::ObjectSerializer::SerializeContent(Map* map,
     // For code objects, output raw bytes first.
     OutputCode(size);
     // Then iterate references via reloc info.
-    object_->IterateBody(map->instance_type(), size, this);
+    object_->IterateBody(map, size, this);
     // Finally skip to the end.
     serializer_->FlushSkip(SkipTo(object_->address() + size));
   } else {
     // For other objects, iterate references first.
-    object_->IterateBody(map->instance_type(), size, this);
+    object_->IterateBody(map, size, this);
     // Then output data payload, if any.
     OutputRawData(object_->address() + size);
   }
@@ -673,23 +680,37 @@ template <class AllocatorT>
 void Serializer<AllocatorT>::ObjectSerializer::VisitPointers(HeapObject* host,
                                                              Object** start,
                                                              Object** end) {
-  Object** current = start;
-  while (current < end) {
-    while (current < end && (*current)->IsSmi()) current++;
-    if (current < end) OutputRawData(reinterpret_cast<Address>(current));
+  VisitPointers(host, reinterpret_cast<MaybeObject**>(start),
+                reinterpret_cast<MaybeObject**>(end));
+}
 
-    while (current < end && !(*current)->IsSmi()) {
-      HeapObject* current_contents = HeapObject::cast(*current);
+template <class AllocatorT>
+void Serializer<AllocatorT>::ObjectSerializer::VisitPointers(
+    HeapObject* host, MaybeObject** start, MaybeObject** end) {
+  MaybeObject** current = start;
+  while (current < end) {
+    while (current < end &&
+           ((*current)->IsSmi() || (*current)->IsClearedWeakHeapObject())) {
+      current++;
+    }
+    if (current < end) {
+      OutputRawData(reinterpret_cast<Address>(current));
+    }
+    HeapObject* current_contents;
+    HeapObjectReferenceType reference_type;
+    while (current < end && (*current)->ToStrongOrWeakHeapObject(
+                                &current_contents, &reference_type)) {
       int root_index = serializer_->root_index_map()->Lookup(current_contents);
       // Repeats are not subject to the write barrier so we can only use
       // immortal immovable root members. They are never in new space.
       if (current != start && root_index != RootIndexMap::kInvalidRootIndex &&
           Heap::RootIsImmortalImmovable(root_index) &&
-          current_contents == current[-1]) {
+          *current == current[-1]) {
+        DCHECK_EQ(reference_type, HeapObjectReferenceType::STRONG);
         DCHECK(!serializer_->isolate()->heap()->InNewSpace(current_contents));
         int repeat_count = 1;
         while (&current[repeat_count] < end - 1 &&
-               current[repeat_count] == current_contents) {
+               current[repeat_count] == *current) {
           repeat_count++;
         }
         current += repeat_count;
@@ -701,6 +722,9 @@ void Serializer<AllocatorT>::ObjectSerializer::VisitPointers(HeapObject* host,
           sink_->Put(kFixedRepeatStart + repeat_count, "FixedRepeat");
         }
       } else {
+        if (reference_type == HeapObjectReferenceType::WEAK) {
+          sink_->Put(kWeakPrefix, "WeakReference");
+        }
         serializer_->SerializeObject(current_contents, kPlain, kStartOfObject,
                                      0);
         bytes_processed_so_far_ += kPointerSize;
@@ -770,9 +794,9 @@ void Serializer<AllocatorT>::ObjectSerializer::VisitInternalReference(
   intptr_t pc_offset = rinfo->target_internal_reference_address() - entry;
   intptr_t target_offset = rinfo->target_internal_reference() - entry;
   DCHECK(0 <= pc_offset &&
-         pc_offset <= Code::cast(object_)->instruction_size());
+         pc_offset <= Code::cast(object_)->raw_instruction_size());
   DCHECK(0 <= target_offset &&
-         target_offset <= Code::cast(object_)->instruction_size());
+         target_offset <= Code::cast(object_)->raw_instruction_size());
   sink_->Put(rinfo->rmode() == RelocInfo::INTERNAL_REFERENCE
                  ? kInternalReference
                  : kInternalReferenceEncoded,
@@ -793,6 +817,29 @@ void Serializer<AllocatorT>::ObjectSerializer::VisitRuntimeEntry(
   sink_->PutInt(skip, "SkipB4ExternalRef");
   sink_->PutInt(encoded_reference.index(), "reference index");
   bytes_processed_so_far_ += rinfo->target_address_size();
+}
+
+template <class AllocatorT>
+void Serializer<AllocatorT>::ObjectSerializer::VisitOffHeapTarget(
+    Code* host, RelocInfo* rinfo) {
+#ifdef V8_EMBEDDED_BUILTINS
+  {
+    STATIC_ASSERT(EmbeddedData::kTableSize == Builtins::builtin_count);
+    CHECK(Builtins::IsEmbeddedBuiltin(host));
+    Address addr = rinfo->target_off_heap_target();
+    CHECK_NOT_NULL(addr);
+    CHECK_NOT_NULL(
+        InstructionStream::TryLookupCode(serializer_->isolate(), addr));
+  }
+
+  int skip = SkipTo(rinfo->target_address_address());
+  sink_->Put(kOffHeapTarget, "OffHeapTarget");
+  sink_->PutInt(skip, "SkipB4OffHeapTarget");
+  sink_->PutInt(host->builtin_index(), "builtin index");
+  bytes_processed_so_far_ += rinfo->target_address_size();
+#else
+  UNREACHABLE();
+#endif
 }
 
 template <class AllocatorT>
@@ -874,7 +921,7 @@ void Serializer<AllocatorT>::ObjectSerializer::OutputCode(int size) {
                     RelocInfo::ModeMask(RelocInfo::INTERNAL_REFERENCE_ENCODED);
     for (RelocIterator it(code, mode_mask); !it.done(); it.next()) {
       RelocInfo* rinfo = it.rinfo();
-      rinfo->WipeOut(serializer_->isolate());
+      rinfo->WipeOut();
     }
     // We need to wipe out the header fields *after* wiping out the
     // relocations, because some of these fields are needed for the latter.

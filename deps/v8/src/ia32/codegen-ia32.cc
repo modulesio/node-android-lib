@@ -5,8 +5,9 @@
 #if V8_TARGET_ARCH_IA32
 
 #include "src/codegen.h"
-#include "src/factory-inl.h"
+#include "src/heap/factory-inl.h"
 #include "src/heap/heap.h"
+#include "src/isolate.h"
 #include "src/macro-assembler.h"
 
 namespace v8 {
@@ -16,8 +17,7 @@ namespace internal {
 
 UnaryMathFunctionWithIsolate CreateSqrtFunction(Isolate* isolate) {
   size_t allocated = 0;
-  byte* buffer =
-      AllocateSystemPage(isolate->heap()->GetRandomMmapAddr(), &allocated);
+  byte* buffer = AllocatePage(isolate->heap()->GetRandomMmapAddr(), &allocated);
   if (buffer == nullptr) return nullptr;
 
   MacroAssembler masm(isolate, buffer, static_cast<int>(allocated),
@@ -36,11 +36,10 @@ UnaryMathFunctionWithIsolate CreateSqrtFunction(Isolate* isolate) {
 
   CodeDesc desc;
   masm.GetCode(isolate, &desc);
-  DCHECK(!RelocInfo::RequiresRelocation(isolate, desc));
+  DCHECK(!RelocInfo::RequiresRelocation(desc));
 
-  Assembler::FlushICache(isolate, buffer, allocated);
-  CHECK(base::OS::SetPermissions(buffer, allocated,
-                                 base::OS::MemoryPermission::kReadExecute));
+  Assembler::FlushICache(buffer, allocated);
+  CHECK(SetPermissions(buffer, allocated, PageAllocator::kReadExecute));
   return FUNCTION_CAST<UnaryMathFunctionWithIsolate>(buffer);
 }
 
@@ -133,8 +132,7 @@ class LabelConverter {
 
 MemMoveFunction CreateMemMoveFunction(Isolate* isolate) {
   size_t allocated = 0;
-  byte* buffer =
-      AllocateSystemPage(isolate->heap()->GetRandomMmapAddr(), &allocated);
+  byte* buffer = AllocatePage(isolate->heap()->GetRandomMmapAddr(), &allocated);
   if (buffer == nullptr) return nullptr;
 
   MacroAssembler masm(isolate, buffer, static_cast<int>(allocated),
@@ -450,10 +448,9 @@ MemMoveFunction CreateMemMoveFunction(Isolate* isolate) {
 
   CodeDesc desc;
   masm.GetCode(isolate, &desc);
-  DCHECK(!RelocInfo::RequiresRelocation(isolate, desc));
-  Assembler::FlushICache(isolate, buffer, allocated);
-  CHECK(base::OS::SetPermissions(buffer, allocated,
-                                 base::OS::MemoryPermission::kReadExecute));
+  DCHECK(!RelocInfo::RequiresRelocation(desc));
+  Assembler::FlushICache(buffer, allocated);
+  CHECK(SetPermissions(buffer, allocated, PageAllocator::kReadExecute));
   // TODO(jkummerow): It would be nice to register this code creation event
   // with the PROFILE / GDBJIT system.
   return FUNCTION_CAST<MemMoveFunction>(buffer);

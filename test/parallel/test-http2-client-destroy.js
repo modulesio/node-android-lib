@@ -59,7 +59,6 @@ const Countdown = require('../common/countdown');
       assert(socket.destroyed);
     }));
 
-
     const req = client.request();
     req.on('error', common.expectsError({
       code: 'ERR_HTTP2_STREAM_CANCEL',
@@ -77,15 +76,21 @@ const Countdown = require('../common/countdown');
       message: 'The session has been destroyed'
     };
 
-    common.expectsError(() => client.request(), sessionError);
+    common.expectsError(() => client.setNextStreamID(), sessionError);
+    common.expectsError(() => client.ping(), sessionError);
     common.expectsError(() => client.settings({}), sessionError);
+    common.expectsError(() => client.goaway(), sessionError);
+    common.expectsError(() => client.request(), sessionError);
     client.close();  // should be a non-op at this point
 
     // Wait for setImmediate call from destroy() to complete
     // so that state.destroyed is set to true
     setImmediate(() => {
-      common.expectsError(() => client.request(), sessionError);
+      common.expectsError(() => client.setNextStreamID(), sessionError);
+      common.expectsError(() => client.ping(), sessionError);
       common.expectsError(() => client.settings({}), sessionError);
+      common.expectsError(() => client.goaway(), sessionError);
+      common.expectsError(() => client.request(), sessionError);
       client.close();  // should be a non-op at this point
     });
 
@@ -104,9 +109,6 @@ const Countdown = require('../common/countdown');
 
   server.listen(0, common.mustCall(() => {
     const client = h2.connect(`http://localhost:${server.address().port}`);
-    // On some platforms (e.g. windows), an ECONNRESET may occur at this
-    // point -- or it may not. Do not make this a mustCall
-    client.on('error', () => {});
 
     client.on('close', () => {
       server.close();
@@ -114,9 +116,24 @@ const Countdown = require('../common/countdown');
       client.destroy();
     });
 
+    client.request();
+  }));
+}
+
+// test destroy before connect
+{
+  const server = h2.createServer();
+  server.on('stream', common.mustNotCall());
+
+  server.listen(0, common.mustCall(() => {
+    const client = h2.connect(`http://localhost:${server.address().port}`);
+
+    server.on('connection', common.mustCall(() => {
+      server.close();
+      client.close();
+    }));
+
     const req = client.request();
-    // On some platforms (e.g. windows), an ECONNRESET may occur at this
-    // point -- or it may not. Do not make this a mustCall
-    req.on('error', () => {});
+    req.destroy();
   }));
 }

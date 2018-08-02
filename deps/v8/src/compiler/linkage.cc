@@ -6,12 +6,12 @@
 
 #include "src/assembler-inl.h"
 #include "src/code-stubs.h"
-#include "src/compilation-info.h"
 #include "src/compiler/common-operator.h"
 #include "src/compiler/frame.h"
 #include "src/compiler/node.h"
 #include "src/compiler/osr.h"
 #include "src/compiler/pipeline.h"
+#include "src/optimized-compilation-info.h"
 
 namespace v8 {
 namespace internal {
@@ -75,33 +75,42 @@ bool CallDescriptor::HasSameReturnLocationsAs(
   return true;
 }
 
-int CallDescriptor::GetStackParameterDelta(
-    CallDescriptor const* tail_caller) const {
-  int callee_slots_above_sp = 0;
+int CallDescriptor::GetFirstUnusedStackSlot() const {
+  int slots_above_sp = 0;
   for (size_t i = 0; i < InputCount(); ++i) {
     LinkageLocation operand = GetInputLocation(i);
     if (!operand.IsRegister()) {
       int new_candidate =
           -operand.GetLocation() + operand.GetSizeInPointers() - 1;
-      if (new_candidate > callee_slots_above_sp) {
-        callee_slots_above_sp = new_candidate;
+      if (new_candidate > slots_above_sp) {
+        slots_above_sp = new_candidate;
       }
     }
   }
-  int tail_caller_slots_above_sp = 0;
-  if (tail_caller != nullptr) {
-    for (size_t i = 0; i < tail_caller->InputCount(); ++i) {
-      LinkageLocation operand = tail_caller->GetInputLocation(i);
-      if (!operand.IsRegister()) {
-        int new_candidate =
-            -operand.GetLocation() + operand.GetSizeInPointers() - 1;
-        if (new_candidate > tail_caller_slots_above_sp) {
-          tail_caller_slots_above_sp = new_candidate;
-        }
+  return slots_above_sp;
+}
+
+int CallDescriptor::GetStackParameterDelta(
+    CallDescriptor const* tail_caller) const {
+  int callee_slots_above_sp = GetFirstUnusedStackSlot();
+  int tail_caller_slots_above_sp = tail_caller->GetFirstUnusedStackSlot();
+  int stack_param_delta = callee_slots_above_sp - tail_caller_slots_above_sp;
+  if (kPadArguments) {
+    // Adjust stack delta when it is odd.
+    if (stack_param_delta % 2 != 0) {
+      if (callee_slots_above_sp % 2 != 0) {
+        // The delta is odd due to the callee - we will need to add one slot
+        // of padding.
+        ++stack_param_delta;
+      } else {
+        // The delta is odd because of the caller. We already have one slot of
+        // padding that we can reuse for arguments, so we will need one fewer
+        // slot.
+        --stack_param_delta;
       }
     }
   }
-  return callee_slots_above_sp - tail_caller_slots_above_sp;
+  return stack_param_delta;
 }
 
 bool CallDescriptor::CanTailCall(const Node* node) const {
@@ -126,7 +135,8 @@ int CallDescriptor::CalculateFixedFrameSize() const {
   UNREACHABLE();
 }
 
-CallDescriptor* Linkage::ComputeIncoming(Zone* zone, CompilationInfo* info) {
+CallDescriptor* Linkage::ComputeIncoming(Zone* zone,
+                                         OptimizedCompilationInfo* info) {
   DCHECK(!info->IsStub());
   if (!info->closure().is_null()) {
     // If we are compiling a JS function, use a JS call descriptor,
@@ -170,10 +180,8 @@ bool Linkage::NeedsFrameStateInput(Runtime::FunctionId function) {
       return false;
 
     // Some inline intrinsics are also safe to call without a FrameState.
-    case Runtime::kInlineClassOf:
     case Runtime::kInlineCreateIterResultObject:
     case Runtime::kInlineGeneratorClose:
-    case Runtime::kInlineGeneratorGetContext:
     case Runtime::kInlineGeneratorGetInputOrDebugPos:
     case Runtime::kInlineGeneratorGetResumeMode:
     case Runtime::kInlineCreateJSGeneratorObject:
@@ -453,6 +461,8 @@ CallDescriptor* Linkage::GetBytecodeDispatchCallDescriptor(
   // The target for interpreter dispatches is a code entry address.
   MachineType target_type = MachineType::Pointer();
   LinkageLocation target_loc = LinkageLocation::ForAnyRegister(target_type);
+  const CallDescriptor::Flags kFlags =
+      CallDescriptor::kCanUseRoots | CallDescriptor::kFixedTargetRegister;
   return new (zone) CallDescriptor(  // --
       CallDescriptor::kCallAddress,  // kind
       target_type,                   // target MachineType
@@ -462,7 +472,7 @@ CallDescriptor* Linkage::GetBytecodeDispatchCallDescriptor(
       Operator::kNoProperties,       // properties
       kNoCalleeSaved,                // callee-saved registers
       kNoCalleeSaved,                // callee-saved fp
-      CallDescriptor::kCanUseRoots,  // flags
+      kFlags,                        // flags
       descriptor.DebugName(isolate));
 }
 

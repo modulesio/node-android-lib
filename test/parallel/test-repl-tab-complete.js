@@ -26,6 +26,9 @@ const assert = require('assert');
 const fixtures = require('../common/fixtures');
 const hasInspector = process.config.variables.v8_enable_inspector === 1;
 
+if (!common.isMainThread)
+  common.skip('process.chdir is not available in Workers');
+
 // We have to change the directory to ../fixtures before requiring repl
 // in order to make the tests for completion of node_modules work properly
 // since repl modifies module.paths.
@@ -146,7 +149,10 @@ putIn.run([
   ' one:1',
   '};'
 ]);
-testMe.complete('inner.o', getNoResultsFunction());
+// See: https://github.com/nodejs/node/issues/21586
+// testMe.complete('inner.o', getNoResultsFunction());
+testMe.complete('inner.o', common.mustCall(function(error, data) {
+}));
 
 putIn.run(['.clear']);
 
@@ -201,6 +207,20 @@ testMe.complete(' ', common.mustCall(function(error, data) {
 // any other properties up the "global" object's prototype chain
 testMe.complete('toSt', common.mustCall(function(error, data) {
   assert.deepStrictEqual(data, [['toString'], 'toSt']);
+}));
+
+// own properties should shadow properties on the prototype
+putIn.run(['.clear']);
+putIn.run([
+  'var x = Object.create(null);',
+  'x.a = 1;',
+  'x.b = 2;',
+  'var y = Object.create(x);',
+  'y.a = 3;',
+  'y.c = 4;'
+]);
+testMe.complete('y.', common.mustCall(function(error, data) {
+  assert.deepStrictEqual(data, [['y.b', '', 'y.a', 'y.c'], 'y.']);
 }));
 
 // Tab complete provides built in libs for require()
@@ -365,6 +385,12 @@ putIn.run(['.clear']);
 
 testMe.complete('.b', common.mustCall((error, data) => {
   assert.deepStrictEqual(data, [['break'], 'b']);
+}));
+putIn.run(['.clear']);
+putIn.run(['var obj = {"hello, world!": "some string", "key": 123}']);
+testMe.complete('obj.', common.mustCall((error, data) => {
+  assert.strictEqual(data[0].includes('obj.hello, world!'), false);
+  assert(data[0].includes('obj.key'));
 }));
 
 // tab completion for large buffer

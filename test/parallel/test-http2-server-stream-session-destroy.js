@@ -34,15 +34,18 @@ server.on('stream', common.mustCall((stream) => {
       type: Error
     }
   );
+  stream.on('error', common.expectsError({
+    type: Error,
+    code: 'ERR_STREAM_WRITE_AFTER_END',
+    message: 'write after end'
+  }));
   assert.strictEqual(stream.write('data'), false);
 }));
 
 server.listen(0, common.mustCall(() => {
   const client = h2.connect(`http://localhost:${server.address().port}`);
-  client.on('error', () => {});
   const req = client.request();
   req.resume();
   req.on('end', common.mustCall());
-  req.on('close', common.mustCall(() => server.close()));
-  req.on('error', () => {});
+  req.on('close', common.mustCall(() => server.close(common.mustCall())));
 }));

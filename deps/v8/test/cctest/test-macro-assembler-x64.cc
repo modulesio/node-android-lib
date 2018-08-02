@@ -30,9 +30,10 @@
 #include "src/v8.h"
 
 #include "src/base/platform/platform.h"
-#include "src/factory.h"
+#include "src/heap/factory.h"
 #include "src/macro-assembler.h"
 #include "src/objects-inl.h"
+#include "src/simulator.h"
 #include "test/cctest/cctest.h"
 
 namespace v8 {
@@ -48,7 +49,7 @@ namespace test_macro_assembler_x64 {
 // This calling convention is used on Linux, with GCC, and on Mac OS,
 // with GCC.  A different convention is used on 64-bit windows.
 
-typedef int (*F0)();
+typedef int(F0)();
 
 #define __ masm->
 
@@ -127,8 +128,10 @@ TEST(SmiMove) {
 
   CodeDesc desc;
   masm->GetCode(isolate, &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
-  int result = FUNCTION_CAST<F0>(buffer)();
+  auto f = GeneratedCode<F0>::FromAddress(CcTest::i_isolate(), buffer);
+  int result = f.Call();
   CHECK_EQ(0, result);
 }
 
@@ -218,8 +221,10 @@ TEST(SmiCompare) {
 
   CodeDesc desc;
   masm->GetCode(isolate, &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
-  int result = FUNCTION_CAST<F0>(buffer)();
+  auto f = GeneratedCode<F0>::FromAddress(CcTest::i_isolate(), buffer);
+  int result = f.Call();
   CHECK_EQ(0, result);
 }
 
@@ -317,8 +322,10 @@ TEST(Integer32ToSmi) {
 
   CodeDesc desc;
   masm->GetCode(isolate, &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
-  int result = FUNCTION_CAST<F0>(buffer)();
+  auto f = GeneratedCode<F0>::FromAddress(CcTest::i_isolate(), buffer);
+  int result = f.Call();
   CHECK_EQ(0, result);
 }
 
@@ -391,8 +398,10 @@ TEST(SmiCheck) {
 
   CodeDesc desc;
   masm->GetCode(isolate, &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
-  int result = FUNCTION_CAST<F0>(buffer)();
+  auto f = GeneratedCode<F0>::FromAddress(CcTest::i_isolate(), buffer);
+  int result = f.Call();
   CHECK_EQ(0, result);
 }
 
@@ -444,8 +453,10 @@ TEST(SmiIndex) {
 
   CodeDesc desc;
   masm->GetCode(isolate, &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
-  int result = FUNCTION_CAST<F0>(buffer)();
+  auto f = GeneratedCode<F0>::FromAddress(CcTest::i_isolate(), buffer);
+  int result = f.Call();
   CHECK_EQ(0, result);
 }
 
@@ -487,7 +498,7 @@ TEST(OperandOffset) {
   __ leaq(r13, Operand(rbp, -3 * kPointerSize));
   __ leaq(rbx, Operand(rbp, -5 * kPointerSize));
   __ movl(rcx, Immediate(2));
-  __ Move(r8, reinterpret_cast<Address>(&data[128]), RelocInfo::NONE64);
+  __ Move(r8, reinterpret_cast<Address>(&data[128]), RelocInfo::NONE);
   __ movl(rax, Immediate(1));
 
   Operand sp0 = Operand(rsp, 0);
@@ -794,8 +805,10 @@ TEST(OperandOffset) {
 
   CodeDesc desc;
   masm->GetCode(isolate, &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
-  int result = FUNCTION_CAST<F0>(buffer)();
+  auto f = GeneratedCode<F0>::FromAddress(CcTest::i_isolate(), buffer);
+  int result = f.Call();
   CHECK_EQ(0, result);
 }
 
@@ -829,10 +842,10 @@ TEST(LoadAndStoreWithRepresentation) {
   // Test 2.
   __ movq(rax, Immediate(2));  // Test number.
   __ movq(Operand(rsp, 0 * kPointerSize), Immediate(0));
-  __ Set(rcx, V8_2PART_UINT64_C(0xdeadbeaf, 12345678));
+  __ Set(rcx, V8_2PART_UINT64_C(0xDEADBEAF, 12345678));
   __ Store(Operand(rsp, 0 * kPointerSize), rcx, Representation::Smi());
   __ movq(rcx, Operand(rsp, 0 * kPointerSize));
-  __ Set(rdx, V8_2PART_UINT64_C(0xdeadbeaf, 12345678));
+  __ Set(rdx, V8_2PART_UINT64_C(0xDEADBEAF, 12345678));
   __ cmpq(rcx, rdx);
   __ j(not_equal, &exit);
   __ Load(rdx, Operand(rsp, 0 * kPointerSize), Representation::Smi());
@@ -868,10 +881,10 @@ TEST(LoadAndStoreWithRepresentation) {
   // Test 5.
   __ movq(rax, Immediate(5));  // Test number.
   __ movq(Operand(rsp, 0 * kPointerSize), Immediate(0));
-  __ Set(rcx, V8_2PART_UINT64_C(0x12345678, deadbeaf));
+  __ Set(rcx, V8_2PART_UINT64_C(0x12345678, DEADBEAF));
   __ Store(Operand(rsp, 0 * kPointerSize), rcx, Representation::Tagged());
   __ movq(rcx, Operand(rsp, 0 * kPointerSize));
-  __ Set(rdx, V8_2PART_UINT64_C(0x12345678, deadbeaf));
+  __ Set(rdx, V8_2PART_UINT64_C(0x12345678, DEADBEAF));
   __ cmpq(rcx, rdx);
   __ j(not_equal, &exit);
   __ Load(rdx, Operand(rsp, 0 * kPointerSize), Representation::Tagged());
@@ -940,8 +953,10 @@ TEST(LoadAndStoreWithRepresentation) {
 
   CodeDesc desc;
   masm->GetCode(isolate, &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
-  int result = FUNCTION_CAST<F0>(buffer)();
+  auto f = GeneratedCode<F0>::FromAddress(CcTest::i_isolate(), buffer);
+  int result = f.Call();
   CHECK_EQ(0, result);
 }
 
@@ -1092,8 +1107,10 @@ TEST(SIMDMacros) {
 
   CodeDesc desc;
   masm->GetCode(isolate, &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
-  int result = FUNCTION_CAST<F0>(buffer)();
+  auto f = GeneratedCode<F0>::FromAddress(CcTest::i_isolate(), buffer);
+  int result = f.Call();
   CHECK_EQ(0, result);
 }
 

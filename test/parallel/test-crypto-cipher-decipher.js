@@ -81,7 +81,8 @@ testCipher2(Buffer.from('0123456789abcdef'));
     {
       code: 'ERR_INVALID_ARG_TYPE',
       type: TypeError,
-      message: 'The "cipher" argument must be of type string'
+      message: 'The "cipher" argument must be of type string. ' +
+               'Received type object'
     });
 
   common.expectsError(
@@ -90,7 +91,7 @@ testCipher2(Buffer.from('0123456789abcdef'));
       code: 'ERR_INVALID_ARG_TYPE',
       type: TypeError,
       message: 'The "password" argument must be one of type string, Buffer, ' +
-               'TypedArray, or DataView'
+               'TypedArray, or DataView. Received type object'
     });
 
   common.expectsError(
@@ -99,7 +100,7 @@ testCipher2(Buffer.from('0123456789abcdef'));
       code: 'ERR_INVALID_ARG_TYPE',
       type: TypeError,
       message: 'The "data" argument must be one of type string, Buffer, ' +
-               'TypedArray, or DataView'
+               'TypedArray, or DataView. Received type object'
     });
 
   common.expectsError(
@@ -108,7 +109,7 @@ testCipher2(Buffer.from('0123456789abcdef'));
       code: 'ERR_INVALID_ARG_TYPE',
       type: TypeError,
       message: 'The "buffer" argument must be one of type Buffer, ' +
-               'TypedArray, or DataView'
+               'TypedArray, or DataView. Received type object'
     });
 
   common.expectsError(
@@ -117,7 +118,7 @@ testCipher2(Buffer.from('0123456789abcdef'));
       code: 'ERR_INVALID_ARG_TYPE',
       type: TypeError,
       message: 'The "buffer" argument must be one of type Buffer, ' +
-               'TypedArray, or DataView'
+               'TypedArray, or DataView. Received type object'
     });
 }
 
@@ -132,7 +133,8 @@ testCipher2(Buffer.from('0123456789abcdef'));
     {
       code: 'ERR_INVALID_ARG_TYPE',
       type: TypeError,
-      message: 'The "cipher" argument must be of type string'
+      message: 'The "cipher" argument must be of type string. ' +
+               'Received type object'
     });
 
   common.expectsError(
@@ -141,7 +143,7 @@ testCipher2(Buffer.from('0123456789abcdef'));
       code: 'ERR_INVALID_ARG_TYPE',
       type: TypeError,
       message: 'The "password" argument must be one of type string, Buffer, ' +
-               'TypedArray, or DataView'
+               'TypedArray, or DataView. Received type object'
     });
 }
 
@@ -201,18 +203,18 @@ testCipher2(Buffer.from('0123456789abcdef'));
   let decipher = crypto.createDecipher('aes192', key);
 
   let txt;
-  assert.doesNotThrow(() => txt = decipher.update(ciph, 'base64', 'ucs2'));
-  assert.doesNotThrow(() => txt += decipher.final('ucs2'));
+  txt = decipher.update(ciph, 'base64', 'ucs2');
+  txt += decipher.final('ucs2');
   assert.strictEqual(txt, plaintext);
 
   decipher = crypto.createDecipher('aes192', key);
-  assert.doesNotThrow(() => txt = decipher.update(ciph, 'base64', 'ucs-2'));
-  assert.doesNotThrow(() => txt += decipher.final('ucs-2'));
+  txt = decipher.update(ciph, 'base64', 'ucs-2');
+  txt += decipher.final('ucs-2');
   assert.strictEqual(txt, plaintext);
 
   decipher = crypto.createDecipher('aes192', key);
-  assert.doesNotThrow(() => txt = decipher.update(ciph, 'base64', 'utf-16le'));
-  assert.doesNotThrow(() => txt += decipher.final('utf-16le'));
+  txt = decipher.update(ciph, 'base64', 'utf-16le');
+  txt += decipher.final('utf-16le');
   assert.strictEqual(txt, plaintext);
 }
 
@@ -234,7 +236,8 @@ testCipher2(Buffer.from('0123456789abcdef'));
   const data = Buffer.from('test-crypto-cipher-decipher');
 
   common.expectWarning('Warning',
-                       'Use Cipheriv for counter mode of aes-256-gcm');
+                       'Use Cipheriv for counter mode of aes-256-gcm',
+                       common.noWarnCode);
 
   const cipher = crypto.createCipher('aes-256-gcm', key);
   cipher.setAAD(aadbuf);

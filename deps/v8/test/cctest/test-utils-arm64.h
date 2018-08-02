@@ -52,8 +52,7 @@ class RegisterDump {
   RegisterDump() : completed_(false) {}
 
   // The Dump method generates code to store a snapshot of the register values.
-  // It needs to be able to use the stack temporarily, and requires that the
-  // current stack pointer is csp, and is properly aligned.
+  // It needs to be able to use the stack temporarily.
   //
   // The dumping code is generated though the given MacroAssembler. No registers
   // are corrupted in the process, but the stack is used briefly. The flags will
@@ -244,7 +243,7 @@ RegList PopulateVRegisterArray(VRegister* s, VRegister* d, VRegister* v,
 // top word anyway, so clobbering the full X registers should make tests more
 // rigorous.
 void Clobber(MacroAssembler* masm, RegList reg_list,
-             uint64_t const value = 0xfedcba9876543210UL);
+             uint64_t const value = 0xFEDCBA9876543210UL);
 
 // As Clobber, but for FP registers.
 void ClobberFP(MacroAssembler* masm, RegList reg_list,

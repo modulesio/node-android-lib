@@ -1,63 +1,10 @@
-// Need to import standard headers before redefining private, otherwise it
-// won't compile.
-#include <algorithm>
-#include <array>
-#include <atomic>
-#include <bitset>
-#include <cctype>
-#include <climits>
-#include <cmath>
-#include <cstdarg>
-#include <cstddef>
-#include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <ctime>
-#include <deque>
-#include <exception>
-#include <forward_list>
-#include <fstream>
-#include <functional>
-#include <iomanip>
-#include <iosfwd>
-#include <iostream>
-#include <istream>
-#include <iterator>
-#include <limits>
-#include <list>
-#include <map>
-#include <memory>
-#include <new>
-#include <ostream>
-#include <queue>
-#include <set>
-#include <sstream>
-#include <stack>
-#include <streambuf>
-#include <string>
-#include <tuple>
-#include <type_traits>
-#include <typeinfo>
-#include <unordered_map>
-#include <unordered_set>
-#include <utility>
-#include <vector>
-
-namespace node {
-// Forward declaration needed before redefining private.
-int GenDebugSymbols();
-}  // namespace node
-
-
-#define private friend int GenDebugSymbols(); private
-
 #include "env.h"
 #include "base_object-inl.h"
 #include "handle_wrap.h"
 #include "util-inl.h"
 #include "req_wrap.h"
 #include "v8abbr.h"
+#include "node_context_data.h"
 
 #define NODEDBG_SYMBOL(Name)  nodedbg_ ## Name
 
@@ -88,7 +35,7 @@ int GenDebugSymbols();
   V(ListNode_ReqWrap, next_, uintptr_t, ListNode<ReqWrap<uv_req_t>>::next_)
 
 extern "C" {
-int nodedbg_const_Environment__kContextEmbedderDataIndex__int;
+int nodedbg_const_ContextEmbedderIndex__kEnvironment__int;
 uintptr_t nodedbg_offset_ExternalString__data__uintptr_t;
 
 #define V(Class, Member, Type, Accessor)                                      \
@@ -100,8 +47,8 @@ uintptr_t nodedbg_offset_ExternalString__data__uintptr_t;
 namespace node {
 
 int GenDebugSymbols() {
-  nodedbg_const_Environment__kContextEmbedderDataIndex__int =
-      Environment::kContextEmbedderDataIndex;
+  nodedbg_const_ContextEmbedderIndex__kEnvironment__int =
+      ContextEmbedderIndex::kEnvironment;
 
   nodedbg_offset_ExternalString__data__uintptr_t = NODE_OFF_EXTSTR_DATA;
 

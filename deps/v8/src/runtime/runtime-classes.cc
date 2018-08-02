@@ -32,7 +32,7 @@ RUNTIME_FUNCTION(Runtime_ThrowConstructorNonCallableError) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
   CONVERT_ARG_HANDLE_CHECKED(JSFunction, constructor, 0);
-  Handle<String> name(constructor->shared()->name(), isolate);
+  Handle<String> name(constructor->shared()->Name(), isolate);
   THROW_NEW_ERROR_RETURN_FAILURE(
       isolate, NewTypeError(MessageTemplate::kConstructorNonCallable, name));
 }
@@ -65,7 +65,7 @@ Object* ThrowNotSuperConstructor(Isolate* isolate, Handle<Object> constructor,
                                  Handle<JSFunction> function) {
   Handle<String> super_name;
   if (constructor->IsJSFunction()) {
-    super_name = handle(Handle<JSFunction>::cast(constructor)->shared()->name(),
+    super_name = handle(Handle<JSFunction>::cast(constructor)->shared()->Name(),
                         isolate);
   } else if (constructor->IsOddball()) {
     DCHECK(constructor->IsNull(isolate));
@@ -77,7 +77,7 @@ Object* ThrowNotSuperConstructor(Isolate* isolate, Handle<Object> constructor,
   if (super_name->length() == 0) {
     super_name = isolate->factory()->null_string();
   }
-  Handle<String> function_name(function->shared()->name(), isolate);
+  Handle<String> function_name(function->shared()->Name(), isolate);
   // anonymous class
   if (function_name->length() == 0) {
     THROW_NEW_ERROR_RETURN_FAILURE(
@@ -158,7 +158,7 @@ MaybeHandle<Object> GetMethodAndSetHomeObjectAndName(
 
   SetHomeObject(isolate, *method, *home_object);
 
-  if (!method->shared()->has_shared_name()) {
+  if (!method->shared()->HasSharedName()) {
     // TODO(ishell): method does not have a shared name at this point only if
     // the key is a computed property name. However, the bytecode generator
     // explicitly generates ToName bytecodes to ensure that the computed
@@ -195,7 +195,7 @@ Object* GetMethodWithSharedNameAndSetHomeObject(Isolate* isolate,
 
   SetHomeObject(isolate, *method, home_object);
 
-  DCHECK(method->shared()->has_shared_name());
+  DCHECK(method->shared()->HasSharedName());
   return *method;
 }
 
@@ -339,7 +339,6 @@ bool AddDescriptorsByTemplate(
 
   map->InitializeDescriptors(*descriptors,
                              LayoutDescriptor::FastPointerLayout());
-
   if (elements_dictionary->NumberOfElements() > 0) {
     if (!SubstituteValues<NumberDictionary>(isolate, elements_dictionary,
                                             receiver, args)) {
@@ -454,7 +453,6 @@ bool InitClassPrototype(Isolate* isolate,
   Map::SetPrototype(map, prototype_parent);
   constructor->set_prototype_or_initial_map(*prototype);
   map->SetConstructor(*constructor);
-
   Handle<FixedArray> computed_properties(
       class_boilerplate->instance_computed_properties(), isolate);
   Handle<NumberDictionary> elements_dictionary_template(
@@ -467,8 +465,8 @@ bool InitClassPrototype(Isolate* isolate,
     Handle<NameDictionary> properties_dictionary_template =
         Handle<NameDictionary>::cast(properties_template);
 
-    map->set_dictionary_map(true);
-    map->set_migration_target(false);
+    map->set_is_dictionary_map(true);
+    map->set_is_migration_target(false);
     map->set_may_have_interesting_symbols(true);
     map->set_construction_counter(Map::kNoSlackTracking);
 
@@ -519,10 +517,10 @@ bool InitClassConstructor(Isolate* isolate,
     Handle<NameDictionary> properties_dictionary_template =
         Handle<NameDictionary>::cast(properties_template);
 
-    map->set_dictionary_map(true);
+    map->set_is_dictionary_map(true);
     map->InitializeDescriptors(isolate->heap()->empty_descriptor_array(),
                                LayoutDescriptor::FastPointerLayout());
-    map->set_migration_target(false);
+    map->set_is_migration_target(false);
     map->set_may_have_interesting_symbols(true);
     map->set_construction_counter(Map::kNoSlackTracking);
 
@@ -595,6 +593,14 @@ MaybeHandle<Object> DefineClass(Isolate* isolate,
     DCHECK(isolate->has_pending_exception());
     return MaybeHandle<Object>();
   }
+  if (FLAG_trace_maps) {
+    LOG(isolate,
+        MapEvent("InitialMap", nullptr, constructor->map(),
+                 "init class constructor", constructor->shared()->DebugName()));
+    LOG(isolate, MapEvent("InitialMap", nullptr, prototype->map(),
+                          "init class prototype"));
+  }
+
   return prototype;
 }
 

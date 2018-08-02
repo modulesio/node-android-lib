@@ -17,6 +17,8 @@
 #include "src/objects-inl.h"
 #include "src/snapshot/serializer-common.h"
 #include "src/string-stream.h"
+#include "src/wasm/wasm-code-manager.h"
+#include "src/wasm/wasm-engine.h"
 
 namespace v8 {
 namespace internal {
@@ -37,19 +39,27 @@ class V8NameConverter: public disasm::NameConverter {
 
 
 const char* V8NameConverter::NameOfAddress(byte* pc) const {
-  const char* name =
-      code_ == nullptr ? nullptr : code_->GetIsolate()->builtins()->Lookup(pc);
-
-  if (name != nullptr) {
-    SNPrintF(v8_buffer_, "%p  (%s)", static_cast<void*>(pc), name);
-    return v8_buffer_.start();
-  }
-
   if (code_ != nullptr) {
-    int offs = static_cast<int>(pc - code_->instruction_start());
+    Isolate* isolate = code_->GetIsolate();
+    const char* name = isolate->builtins()->Lookup(pc);
+
+    if (name != nullptr) {
+      SNPrintF(v8_buffer_, "%p  (%s)", static_cast<void*>(pc), name);
+      return v8_buffer_.start();
+    }
+
+    int offs = static_cast<int>(pc - code_->raw_instruction_start());
     // print as code offset, if it seems reasonable
-    if (0 <= offs && offs < code_->instruction_size()) {
+    if (0 <= offs && offs < code_->raw_instruction_size()) {
       SNPrintF(v8_buffer_, "%p  <+0x%x>", static_cast<void*>(pc), offs);
+      return v8_buffer_.start();
+    }
+
+    wasm::WasmCode* wasm_code =
+        isolate->wasm_engine()->code_manager()->LookupCode(pc);
+    if (wasm_code != nullptr) {
+      SNPrintF(v8_buffer_, "%p  (%s)", static_cast<void*>(pc),
+               GetWasmCodeKindAsString(wasm_code->kind()));
       return v8_buffer_.start();
     }
   }
@@ -125,6 +135,8 @@ static void PrintRelocInfo(StringBuilder* out, Isolate* isolate,
       out->AddFormatted(" %s, %s, ", Code::Kind2String(kind),
                         CodeStub::MajorName(major_key));
       out->AddFormatted("minor: %d", minor_key);
+    } else if (code->is_builtin()) {
+      out->AddFormatted(" Builtin::%s", Builtins::name(code->builtin_index()));
     } else {
       out->AddFormatted(" %s", Code::Kind2String(kind));
     }
@@ -155,7 +167,8 @@ static void PrintRelocInfo(StringBuilder* out, Isolate* isolate,
 }
 
 static int DecodeIt(Isolate* isolate, std::ostream* os,
-                    const V8NameConverter& converter, byte* begin, byte* end) {
+                    const V8NameConverter& converter, byte* begin, byte* end,
+                    void* current_pc) {
   SealHandleScope shs(isolate);
   DisallowHeapAllocation no_alloc;
   ExternalReferenceEncoder ref_encoder(isolate);
@@ -232,6 +245,10 @@ static int DecodeIt(Isolate* isolate, std::ostream* os,
     }
 
     // Instruction address and instruction offset.
+    if (FLAG_log_colour && prev_pc == current_pc) {
+      // If this is the given "current" pc, make it yellow and bold.
+      out.AddFormatted("\033[33;1m");
+    }
     out.AddFormatted("%p  %4" V8PRIxPTRDIFF "  ", static_cast<void*>(prev_pc),
                      prev_pc - begin);
 
@@ -241,7 +258,9 @@ static int DecodeIt(Isolate* isolate, std::ostream* os,
     // Print all the reloc info for this instruction which are not comments.
     for (size_t i = 0; i < pcs.size(); i++) {
       // Put together the reloc info
-      RelocInfo relocinfo(pcs[i], rmodes[i], datas[i], converter.code());
+      Code* host = converter.code();
+      RelocInfo relocinfo(pcs[i], rmodes[i], datas[i], host);
+      relocinfo.set_constant_pool(host ? host->constant_pool() : nullptr);
 
       bool first_reloc_info = (i == 0);
       PrintRelocInfo(&out, isolate, ref_encoder, os, &relocinfo,
@@ -252,7 +271,7 @@ static int DecodeIt(Isolate* isolate, std::ostream* os,
     // already, check if we can find some RelocInfo for the target address in
     // the constant pool.
     if (pcs.empty() && converter.code() != nullptr) {
-      RelocInfo dummy_rinfo(prev_pc, RelocInfo::NONE32, 0, nullptr);
+      RelocInfo dummy_rinfo(prev_pc, RelocInfo::NONE, 0, nullptr);
       if (dummy_rinfo.IsInConstantPool()) {
         byte* constant_pool_entry_address =
             dummy_rinfo.constant_pool_entry_address();
@@ -267,6 +286,10 @@ static int DecodeIt(Isolate* isolate, std::ostream* os,
           reloc_it.next();
         }
       }
+    }
+
+    if (FLAG_log_colour && prev_pc == current_pc) {
+      out.AddFormatted("\033[m");
     }
 
     DumpBuffer(os, &out);
@@ -287,17 +310,16 @@ static int DecodeIt(Isolate* isolate, std::ostream* os,
   return static_cast<int>(pc - begin);
 }
 
-
 int Disassembler::Decode(Isolate* isolate, std::ostream* os, byte* begin,
-                         byte* end, Code* code) {
+                         byte* end, Code* code, void* current_pc) {
   V8NameConverter v8NameConverter(code);
-  return DecodeIt(isolate, os, v8NameConverter, begin, end);
+  return DecodeIt(isolate, os, v8NameConverter, begin, end, current_pc);
 }
 
 #else  // ENABLE_DISASSEMBLER
 
 int Disassembler::Decode(Isolate* isolate, std::ostream* os, byte* begin,
-                         byte* end, Code* code) {
+                         byte* end, Code* code, void* current_pc) {
   return 0;
 }
 

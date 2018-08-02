@@ -107,11 +107,16 @@ Code* BuildWithCodeStubAssemblerJS(Isolate* isolate, int32_t builtin_index,
   // Canonicalize handles, so that we can share constant pool entries pointing
   // to code targets without dereferencing their handles.
   CanonicalHandleScope canonical(isolate);
-  Zone zone(isolate->allocator(), ZONE_NAME);
+
+  SegmentSize segment_size = isolate->serializer_enabled()
+                                 ? SegmentSize::kLarge
+                                 : SegmentSize::kDefault;
+  Zone zone(isolate->allocator(), ZONE_NAME, segment_size);
   const int argc_with_recv =
       (argc == SharedFunctionInfo::kDontAdaptArgumentsSentinel) ? 0 : argc + 1;
-  compiler::CodeAssemblerState state(isolate, &zone, argc_with_recv,
-                                     Code::BUILTIN, name, builtin_index);
+  compiler::CodeAssemblerState state(
+      isolate, &zone, argc_with_recv, Code::BUILTIN, name,
+      PoisoningMitigationLevel::kOff, builtin_index);
   generator(&state);
   Handle<Code> code = compiler::CodeAssembler::GenerateCode(&state);
   PostBuildProfileAndTracing(isolate, *code, name);
@@ -127,14 +132,18 @@ Code* BuildWithCodeStubAssemblerCS(Isolate* isolate, int32_t builtin_index,
   // Canonicalize handles, so that we can share constant pool entries pointing
   // to code targets without dereferencing their handles.
   CanonicalHandleScope canonical(isolate);
-  Zone zone(isolate->allocator(), ZONE_NAME);
+  SegmentSize segment_size = isolate->serializer_enabled()
+                                 ? SegmentSize::kLarge
+                                 : SegmentSize::kDefault;
+  Zone zone(isolate->allocator(), ZONE_NAME, segment_size);
   // The interface descriptor with given key must be initialized at this point
   // and this construction just queries the details from the descriptors table.
   CallInterfaceDescriptor descriptor(isolate, interface_descriptor);
   // Ensure descriptor is already initialized.
   DCHECK_LE(0, descriptor.GetRegisterParameterCount());
   compiler::CodeAssemblerState state(isolate, &zone, descriptor, Code::BUILTIN,
-                                     name, result_size, 0, builtin_index);
+                                     name, PoisoningMitigationLevel::kOff,
+                                     result_size, 0, builtin_index);
   generator(&state);
   Handle<Code> code = compiler::CodeAssembler::GenerateCode(&state);
   PostBuildProfileAndTracing(isolate, *code, name);
@@ -179,7 +188,7 @@ void SetupIsolateDelegate::ReplacePlaceholders(Isolate* isolate) {
         if (!target->is_builtin()) continue;
         Code* new_target =
             Code::cast(builtins->builtins_[target->builtin_index()]);
-        rinfo->set_target_address(isolate, new_target->instruction_start(),
+        rinfo->set_target_address(new_target->raw_instruction_start(),
                                   UPDATE_WRITE_BARRIER, SKIP_ICACHE_FLUSH);
       } else {
         DCHECK(RelocInfo::IsEmbeddedObject(rinfo->rmode()));
@@ -195,8 +204,8 @@ void SetupIsolateDelegate::ReplacePlaceholders(Isolate* isolate) {
       flush_icache = true;
     }
     if (flush_icache) {
-      Assembler::FlushICache(isolate, code->instruction_start(),
-                             code->instruction_size());
+      Assembler::FlushICache(code->raw_instruction_start(),
+                             code->raw_instruction_size());
     }
   }
 }
@@ -275,17 +284,6 @@ void SetupIsolateDelegate::SetupBuiltinsInternal(Isolate* isolate) {
 
   BUILTIN_EXCEPTION_CAUGHT_PREDICTION_LIST(SET_EXCEPTION_CAUGHT_PREDICTION)
 #undef SET_EXCEPTION_CAUGHT_PREDICTION
-
-  // TODO(mstarzinger,6792): This code-space modification section should be
-  // moved into {Heap} eventually and a safe wrapper be provided.
-  CodeSpaceMemoryModificationScope modification_scope(isolate->heap());
-
-#define SET_CODE_NON_TAGGED_PARAMS(Name)             \
-  Code::cast(builtins->builtins_[Builtins::k##Name]) \
-      ->set_has_tagged_params(false);
-
-  BUILTINS_WITH_UNTAGGED_PARAMS(SET_CODE_NON_TAGGED_PARAMS)
-#undef SET_CODE_NON_TAGGED_PARAMS
 
   builtins->MarkInitialized();
 }

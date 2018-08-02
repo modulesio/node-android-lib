@@ -324,13 +324,13 @@ namespace {
 inline bool ToUpperOverflows(uc32 character) {
   // y with umlauts and the micro sign are the only characters that stop
   // fitting into one-byte when converting to uppercase.
-  static const uc32 yuml_code = 0xff;
-  static const uc32 micro_code = 0xb5;
+  static const uc32 yuml_code = 0xFF;
+  static const uc32 micro_code = 0xB5;
   return (character == yuml_code || character == micro_code);
 }
 
 template <class Converter>
-MUST_USE_RESULT static Object* ConvertCaseHelper(
+V8_WARN_UNUSED_RESULT static Object* ConvertCaseHelper(
     Isolate* isolate, String* string, SeqString* result, int result_length,
     unibrow::Mapping<Converter, 128>* mapping) {
   DisallowHeapAllocation no_gc;
@@ -427,7 +427,7 @@ MUST_USE_RESULT static Object* ConvertCaseHelper(
 }
 
 template <class Converter>
-MUST_USE_RESULT static Object* ConvertCase(
+V8_WARN_UNUSED_RESULT static Object* ConvertCase(
     Handle<String> s, Isolate* isolate,
     unibrow::Mapping<Converter, 128>* mapping) {
   s = String::Flatten(s);

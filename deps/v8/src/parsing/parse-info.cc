@@ -20,19 +20,17 @@ ParseInfo::ParseInfo(AccountingAllocator* zone_allocator)
     : zone_(std::make_shared<Zone>(zone_allocator, ZONE_NAME)),
       flags_(0),
       extension_(nullptr),
-      compile_options_(ScriptCompiler::kNoCompileOptions),
       script_scope_(nullptr),
       unicode_cache_(nullptr),
       stack_limit_(0),
       hash_seed_(0),
-      compiler_hints_(0),
+      function_flags_(0),
       start_position_(0),
       end_position_(0),
       parameters_end_pos_(kNoSourcePosition),
       function_literal_id_(FunctionLiteral::kIdTypeInvalid),
       max_function_literal_id_(FunctionLiteral::kIdTypeInvalid),
       character_stream_(nullptr),
-      cached_data_(nullptr),
       ast_value_factory_(nullptr),
       ast_string_constants_(nullptr),
       function_name_(nullptr),
@@ -45,17 +43,21 @@ ParseInfo::ParseInfo(Handle<SharedFunctionInfo> shared)
   Isolate* isolate = shared->GetIsolate();
   InitFromIsolate(isolate);
 
+  // Do not support re-parsing top-level function of a wrapped script.
+  // TODO(yangguo): consider whether we need a top-level function in a
+  //                wrapped script at all.
+  DCHECK_IMPLIES(is_toplevel(), !Script::cast(shared->script())->is_wrapped());
+
   set_toplevel(shared->is_toplevel());
+  set_wrapped_as_function(shared->is_wrapped());
   set_allow_lazy_parsing(FLAG_lazy_inner_functions);
   set_is_named_expression(shared->is_named_expression());
-  set_compiler_hints(shared->compiler_hints());
-  set_start_position(shared->start_position());
-  set_end_position(shared->end_position());
+  set_function_flags(shared->flags());
+  set_start_position(shared->StartPosition());
+  set_end_position(shared->EndPosition());
   function_literal_id_ = shared->function_literal_id();
   set_language_mode(shared->language_mode());
   set_asm_wasm_broken(shared->is_asm_wasm_broken());
-  set_requires_instance_fields_initializer(
-      shared->requires_instance_fields_initializer());
 
   Handle<Script> script(Script::cast(shared->script()));
   set_script(script);
@@ -64,10 +66,8 @@ ParseInfo::ParseInfo(Handle<SharedFunctionInfo> shared)
   set_module(script->origin_options().IsModule());
   DCHECK(!(is_eval() && is_module()));
 
-  Handle<HeapObject> scope_info(shared->outer_scope_info());
-  if (!scope_info->IsTheHole(isolate) &&
-      Handle<ScopeInfo>::cast(scope_info)->length() > 0) {
-    set_outer_scope_info(Handle<ScopeInfo>::cast(scope_info));
+  if (shared->HasOuterScopeInfo()) {
+    set_outer_scope_info(handle(shared->GetOuterScopeInfo()));
   }
 
   // CollectTypeProfile uses its own feedback slots. If we have existing
@@ -75,9 +75,9 @@ ParseInfo::ParseInfo(Handle<SharedFunctionInfo> shared)
   // has the appropriate slots.
   set_collect_type_profile(
       isolate->is_collecting_type_profile() &&
-      (shared->feedback_metadata()->length() == 0
-           ? script->IsUserJavaScript()
-           : shared->feedback_metadata()->HasTypeProfileSlot()));
+      (shared->HasFeedbackMetadata()
+           ? shared->feedback_metadata()->HasTypeProfileSlot()
+           : script->IsUserJavaScript()));
   if (block_coverage_enabled() && script->IsUserJavaScript()) {
     AllocateSourceRangeMap();
   }
@@ -90,6 +90,7 @@ ParseInfo::ParseInfo(Handle<Script> script)
   set_allow_lazy_parsing();
   set_toplevel();
   set_script(script);
+  set_wrapped_as_function(script->is_wrapped());
 
   set_native(script->type() == Script::TYPE_NATIVE);
   set_eval(script->compilation_type() == Script::COMPILATION_TYPE_EVAL);
@@ -114,9 +115,9 @@ ParseInfo* ParseInfo::AllocateWithoutScript(Handle<SharedFunctionInfo> shared) {
   p->set_toplevel(shared->is_toplevel());
   p->set_allow_lazy_parsing(FLAG_lazy_inner_functions);
   p->set_is_named_expression(shared->is_named_expression());
-  p->set_compiler_hints(shared->compiler_hints());
-  p->set_start_position(shared->start_position());
-  p->set_end_position(shared->end_position());
+  p->set_function_flags(shared->flags());
+  p->set_start_position(shared->StartPosition());
+  p->set_end_position(shared->EndPosition());
   p->function_literal_id_ = shared->function_literal_id();
   p->set_language_mode(shared->language_mode());
 
@@ -133,7 +134,7 @@ ParseInfo* ParseInfo::AllocateWithoutScript(Handle<SharedFunctionInfo> shared) {
   p->set_module(false);
   DCHECK_NE(shared->kind(), FunctionKind::kModule);
 
-  Handle<HeapObject> scope_info(shared->outer_scope_info());
+  Handle<HeapObject> scope_info(shared->GetOuterScopeInfo());
   if (!scope_info->IsTheHole(isolate) &&
       Handle<ScopeInfo>::cast(scope_info)->length() > 0) {
     p->set_outer_scope_info(Handle<ScopeInfo>::cast(scope_info));
@@ -144,11 +145,16 @@ ParseInfo* ParseInfo::AllocateWithoutScript(Handle<SharedFunctionInfo> shared) {
 DeclarationScope* ParseInfo::scope() const { return literal()->scope(); }
 
 bool ParseInfo::is_declaration() const {
-  return SharedFunctionInfo::IsDeclarationBit::decode(compiler_hints_);
+  return SharedFunctionInfo::IsDeclarationBit::decode(function_flags_);
 }
 
 FunctionKind ParseInfo::function_kind() const {
-  return SharedFunctionInfo::FunctionKindBits::decode(compiler_hints_);
+  return SharedFunctionInfo::FunctionKindBits::decode(function_flags_);
+}
+
+bool ParseInfo::requires_instance_fields_initializer() const {
+  return SharedFunctionInfo::RequiresInstanceFieldsInitializer::decode(
+      function_flags_);
 }
 
 void ParseInfo::InitFromIsolate(Isolate* isolate) {

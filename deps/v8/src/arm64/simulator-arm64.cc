@@ -98,13 +98,6 @@ SimSystemRegister SimSystemRegister::DefaultValueFor(SystemRegister id) {
 }
 
 
-void Simulator::Initialize(Isolate* isolate) {
-  if (isolate->simulator_initialized()) return;
-  isolate->set_simulator_initialized(true);
-  ExternalReference::set_redirector(isolate, &RedirectExternalReference);
-}
-
-
 // Get the active Simulator for the current thread.
 Simulator* Simulator::current(Isolate* isolate) {
   Isolate::PerIsolateThreadData* isolate_data =
@@ -124,8 +117,7 @@ Simulator* Simulator::current(Isolate* isolate) {
   return sim;
 }
 
-
-void Simulator::CallVoid(byte* entry, CallArgument* args) {
+void Simulator::CallImpl(byte* entry, CallArgument* args) {
   int index_x = 0;
   int index_d = 0;
 
@@ -166,63 +158,6 @@ void Simulator::CallVoid(byte* entry, CallArgument* args) {
 
   set_sp(original_stack);
 }
-
-
-int64_t Simulator::CallInt64(byte* entry, CallArgument* args) {
-  CallVoid(entry, args);
-  return xreg(0);
-}
-
-
-double Simulator::CallDouble(byte* entry, CallArgument* args) {
-  CallVoid(entry, args);
-  return dreg(0);
-}
-
-
-int64_t Simulator::CallJS(byte* entry,
-                          Object* new_target,
-                          Object* target,
-                          Object* revc,
-                          int64_t argc,
-                          Object*** argv) {
-  CallArgument args[] = {
-    CallArgument(new_target),
-    CallArgument(target),
-    CallArgument(revc),
-    CallArgument(argc),
-    CallArgument(argv),
-    CallArgument::End()
-  };
-  return CallInt64(entry, args);
-}
-
-
-int64_t Simulator::CallRegExp(byte* entry,
-                              String* input,
-                              int64_t start_offset,
-                              const byte* input_start,
-                              const byte* input_end,
-                              int* output,
-                              int64_t output_size,
-                              Address stack_base,
-                              int64_t direct_call,
-                              Isolate* isolate) {
-  CallArgument args[] = {
-    CallArgument(input),
-    CallArgument(start_offset),
-    CallArgument(input_start),
-    CallArgument(input_end),
-    CallArgument(output),
-    CallArgument(output_size),
-    CallArgument(stack_base),
-    CallArgument(direct_call),
-    CallArgument(isolate),
-    CallArgument::End()
-  };
-  return CallInt64(entry, args);
-}
-
 
 void Simulator::CheckPCSComplianceAndRun() {
   // Adjust JS-based stack limit to C-based stack limit.
@@ -350,6 +285,11 @@ uintptr_t Simulator::StackLimit(uintptr_t c_limit) const {
   return stack_limit_ + 1024;
 }
 
+void Simulator::SetRedirectInstruction(Instruction* instruction) {
+  instruction->SetInstructionBits(
+      HLT | Assembler::ImmException(kImmExceptionIsRedirectedCall));
+}
+
 Simulator::Simulator(Decoder<DispatchingDecoderVisitor>* decoder,
                      Isolate* isolate, FILE* stream)
     : decoder_(decoder),
@@ -392,7 +332,7 @@ void Simulator::Init(FILE* stream) {
   stack_limit_ = stack_ + stack_protection_size_;
   uintptr_t tos = stack_ + stack_size_ - stack_protection_size_;
   // The stack pointer must be 16-byte aligned.
-  set_sp(tos & ~0xfUL);
+  set_sp(tos & ~0xFUL);
 
   stream_ = stream;
   print_disasm_ = new PrintDisassembler(stream_);
@@ -412,11 +352,11 @@ void Simulator::ResetState() {
   // Reset registers to 0.
   pc_ = nullptr;
   for (unsigned i = 0; i < kNumberOfRegisters; i++) {
-    set_xreg(i, 0xbadbeef);
+    set_xreg(i, 0xBADBEEF);
   }
   for (unsigned i = 0; i < kNumberOfVRegisters; i++) {
     // Set FP registers to a value that is NaN in both 32-bit and 64-bit FP.
-    set_dreg_bits(i, 0x7ff000007f800001UL);
+    set_dreg_bits(i, 0x7FF000007F800001UL);
   }
   // Returning to address 0 exits the Simulator.
   set_lr(kEndOfSimAddress);
@@ -458,82 +398,6 @@ void Simulator::RunFrom(Instruction* start) {
 }
 
 
-// When the generated code calls an external reference we need to catch that in
-// the simulator.  The external reference will be a function compiled for the
-// host architecture.  We need to call that function instead of trying to
-// execute it with the simulator.  We do that by redirecting the external
-// reference to a svc (Supervisor Call) instruction that is handled by
-// the simulator.  We write the original destination of the jump just at a known
-// offset from the svc instruction so the simulator knows what to call.
-class Redirection {
- public:
-  Redirection(Isolate* isolate, void* external_function,
-              ExternalReference::Type type)
-      : external_function_(external_function), type_(type), next_(nullptr) {
-    redirect_call_.SetInstructionBits(
-        HLT | Assembler::ImmException(kImmExceptionIsRedirectedCall));
-    next_ = isolate->simulator_redirection();
-    // TODO(all): Simulator flush I cache
-    isolate->set_simulator_redirection(this);
-  }
-
-  void* address_of_redirect_call() {
-    return reinterpret_cast<void*>(&redirect_call_);
-  }
-
-  template <typename T>
-  T external_function() { return reinterpret_cast<T>(external_function_); }
-
-  ExternalReference::Type type() { return type_; }
-
-  static Redirection* Get(Isolate* isolate, void* external_function,
-                          ExternalReference::Type type) {
-    Redirection* current = isolate->simulator_redirection();
-    for (; current != nullptr; current = current->next_) {
-      if (current->external_function_ == external_function &&
-          current->type_ == type) {
-        return current;
-      }
-    }
-    return new Redirection(isolate, external_function, type);
-  }
-
-  static Redirection* FromHltInstruction(Instruction* redirect_call) {
-    char* addr_of_hlt = reinterpret_cast<char*>(redirect_call);
-    char* addr_of_redirection =
-        addr_of_hlt - offsetof(Redirection, redirect_call_);
-    return reinterpret_cast<Redirection*>(addr_of_redirection);
-  }
-
-  static void* ReverseRedirection(int64_t reg) {
-    Redirection* redirection =
-        FromHltInstruction(reinterpret_cast<Instruction*>(reg));
-    return redirection->external_function<void*>();
-  }
-
-  static void DeleteChain(Redirection* redirection) {
-    while (redirection != nullptr) {
-      Redirection* next = redirection->next_;
-      delete redirection;
-      redirection = next;
-    }
-  }
-
- private:
-  void* external_function_;
-  Instruction redirect_call_;
-  ExternalReference::Type type_;
-  Redirection* next_;
-};
-
-
-// static
-void Simulator::TearDown(base::CustomMatcherHashMap* i_cache,
-                         Redirection* first) {
-  Redirection::DeleteChain(first);
-}
-
-
 // Calls into the V8 runtime are based on this very simple interface.
 // Note: To be able to return two values from some calls the code in runtime.cc
 // uses the ObjectPair structure.
@@ -561,20 +425,20 @@ typedef void (*SimulatorRuntimeProfilingGetterCall)(int64_t arg0, int64_t arg1,
                                                     void* arg2);
 
 void Simulator::DoRuntimeCall(Instruction* instr) {
-  Redirection* redirection = Redirection::FromHltInstruction(instr);
+  Redirection* redirection = Redirection::FromInstruction(instr);
 
   // The called C code might itself call simulated code, so any
   // caller-saved registers (including lr) could still be clobbered by a
   // redirected call.
   Instruction* return_address = lr();
 
-  int64_t external = redirection->external_function<int64_t>();
+  int64_t external =
+      reinterpret_cast<int64_t>(redirection->external_function());
 
-  TraceSim("Call to host function at %p\n",
-           redirection->external_function<void*>());
+  TraceSim("Call to host function at %p\n", redirection->external_function());
 
   // SP must be 16-byte-aligned at the call interface.
-  bool stack_alignment_exception = ((sp() & 0xf) != 0);
+  bool stack_alignment_exception = ((sp() & 0xF) != 0);
   if (stack_alignment_exception) {
     TraceSim("  with unaligned stack 0x%016" PRIx64 ".\n", sp());
     FATAL("ALIGNMENT EXCEPTION");
@@ -761,28 +625,16 @@ void Simulator::DoRuntimeCall(Instruction* instr) {
   set_pc(return_address);
 }
 
-
-void* Simulator::RedirectExternalReference(Isolate* isolate,
-                                           void* external_function,
-                                           ExternalReference::Type type) {
-  base::LockGuard<base::Mutex> lock_guard(
-      isolate->simulator_redirection_mutex());
-  Redirection* redirection = Redirection::Get(isolate, external_function, type);
-  return redirection->address_of_redirect_call();
-}
-
-
 const char* Simulator::xreg_names[] = {
-"x0",  "x1",  "x2",  "x3",  "x4",   "x5",  "x6",  "x7",
-"x8",  "x9",  "x10", "x11", "x12",  "x13", "x14", "x15",
-"ip0", "ip1", "x18", "x19", "x20",  "x21", "x22", "x23",
-"x24", "x25", "x26", "cp",  "jssp", "fp",  "lr",  "xzr", "csp"};
+    "x0",  "x1",  "x2",  "x3",  "x4",  "x5",  "x6",  "x7",  "x8",  "x9",  "x10",
+    "x11", "x12", "x13", "x14", "x15", "ip0", "ip1", "x18", "x19", "x20", "x21",
+    "x22", "x23", "x24", "x25", "x26", "cp",  "x28", "fp",  "lr",  "xzr", "sp"};
 
 const char* Simulator::wreg_names[] = {
-"w0",  "w1",  "w2",  "w3",  "w4",    "w5",  "w6",  "w7",
-"w8",  "w9",  "w10", "w11", "w12",   "w13", "w14", "w15",
-"w16", "w17", "w18", "w19", "w20",   "w21", "w22", "w23",
-"w24", "w25", "w26", "wcp", "wjssp", "wfp", "wlr", "wzr", "wcsp"};
+    "w0",  "w1",  "w2",  "w3",  "w4",  "w5",  "w6",  "w7",  "w8",
+    "w9",  "w10", "w11", "w12", "w13", "w14", "w15", "w16", "w17",
+    "w18", "w19", "w20", "w21", "w22", "w23", "w24", "w25", "w26",
+    "wcp", "w28", "wfp", "wlr", "wzr", "wsp"};
 
 const char* Simulator::sreg_names[] = {
 "s0",  "s1",  "s2",  "s3",  "s4",  "s5",  "s6",  "s7",
@@ -915,7 +767,7 @@ int Simulator::CodeFromName(const char* name) {
       return i;
     }
   }
-  if ((strcmp("csp", name) == 0) || (strcmp("wcsp", name) == 0)) {
+  if ((strcmp("sp", name) == 0) || (strcmp("wsp", name) == 0)) {
     return kSPRegInternalCode;
   }
   return -1;
@@ -1294,9 +1146,9 @@ void Simulator::PrintRegister(unsigned code, Reg31Mode r31mode) {
 // a floating-point interpretation or a memory access annotation).
 void Simulator::PrintVRegisterRawHelper(unsigned code, int bytes, int lsb) {
   // The template for vector types:
-  //   "# v{code}: 0xffeeddccbbaa99887766554433221100".
+  //   "# v{code}: 0xFFEEDDCCBBAA99887766554433221100".
   // An example with bytes=4 and lsb=8:
-  //   "# v{code}:         0xbbaa9988                ".
+  //   "# v{code}:         0xBBAA9988                ".
   fprintf(stream_, "# %s%5s: %s", clr_vreg_name, VRegNameForCode(code),
           clr_vreg_value);
 
@@ -1393,8 +1245,8 @@ void Simulator::PrintVRegisterFPHelper(unsigned code,
 void Simulator::PrintRegisterRawHelper(unsigned code, Reg31Mode r31mode,
                                        int size_in_bytes) {
   // The template for all supported sizes.
-  //   "# x{code}: 0xffeeddccbbaa9988"
-  //   "# w{code}:         0xbbaa9988"
+  //   "# x{code}: 0xFFEEDDCCBBAA9988"
+  //   "# w{code}:         0xBBAA9988"
   //   "# w{code}<15:0>:       0x9988"
   //   "# w{code}<7:0>:          0x88"
   unsigned padding_chars = (kXRegSize - size_in_bytes) * 2;
@@ -1597,7 +1449,7 @@ void Simulator::VisitUnconditionalBranch(Instruction* instr) {
   switch (instr->Mask(UnconditionalBranchMask)) {
     case BL:
       set_lr(instr->following());
-      // Fall through.
+      V8_FALLTHROUGH;
     case B:
       set_pc(instr->ImmPCOffsetTarget());
       break;
@@ -1625,7 +1477,7 @@ void Simulator::VisitUnconditionalBranchToRegister(Instruction* instr) {
         // this, but if we do trap to allow debugging.
         Debug();
       }
-      // Fall through.
+      V8_FALLTHROUGH;
     }
     case BR:
     case RET: set_pc(target); break;
@@ -1777,7 +1629,7 @@ void Simulator::LogicalHelper(Instruction* instr, T op2) {
   // Switch on the logical operation, stripping out the NOT bit, as it has a
   // different meaning for logical immediate instructions.
   switch (instr->Mask(LogicalOpMask & ~NOT)) {
-    case ANDS: update_flags = true;  // Fall through.
+    case ANDS: update_flags = true; V8_FALLTHROUGH;
     case AND: result = op1 & op2; break;
     case ORR: result = op1 | op2; break;
     case EOR: result = op1 ^ op2; break;
@@ -2231,6 +2083,8 @@ Simulator::TransactionSize Simulator::get_transaction_size(unsigned size) {
       return TransactionSize::HalfWord;
     case 4:
       return TransactionSize::Word;
+    case 8:
+      return TransactionSize::DoubleWord;
     default:
       UNREACHABLE();
   }
@@ -2275,6 +2129,10 @@ void Simulator::VisitLoadStoreAcquireRelease(Instruction* instr) {
       case LDAXR_w:
         set_wreg_no_log(rt, MemoryRead<uint32_t>(address));
         break;
+      case LDAR_x:
+      case LDAXR_x:
+        set_xreg_no_log(rt, MemoryRead<uint64_t>(address));
+        break;
       default:
         UNIMPLEMENTED();
     }
@@ -2298,6 +2156,9 @@ void Simulator::VisitLoadStoreAcquireRelease(Instruction* instr) {
           case STLXR_w:
             MemoryWrite<uint32_t>(address, wreg(rt));
             break;
+          case STLXR_x:
+            MemoryWrite<uint64_t>(address, xreg(rt));
+            break;
           default:
             UNIMPLEMENTED();
         }
@@ -2318,6 +2179,9 @@ void Simulator::VisitLoadStoreAcquireRelease(Instruction* instr) {
           break;
         case STLR_w:
           MemoryWrite<uint32_t>(address, wreg(rt));
+          break;
+        case STLR_x:
+          MemoryWrite<uint64_t>(address, xreg(rt));
           break;
         default:
           UNIMPLEMENTED();
@@ -2367,8 +2231,8 @@ void Simulator::VisitMoveWideImmediate(Instruction* instr) {
         unsigned reg_code = instr->Rd();
         int64_t prev_xn_val = is_64_bits ? xreg(reg_code)
                                          : wreg(reg_code);
-        new_xn_val = (prev_xn_val & ~(0xffffL << shift)) | shifted_imm16;
-      break;
+        new_xn_val = (prev_xn_val & ~(0xFFFFL << shift)) | shifted_imm16;
+        break;
     }
     case MOVZ_w:
     case MOVZ_x: {
@@ -2532,14 +2396,14 @@ static int64_t MultiplyHighSigned(int64_t u, int64_t v) {
   uint64_t u0, v0, w0;
   int64_t u1, v1, w1, w2, t;
 
-  u0 = u & 0xffffffffL;
+  u0 = u & 0xFFFFFFFFL;
   u1 = u >> 32;
-  v0 = v & 0xffffffffL;
+  v0 = v & 0xFFFFFFFFL;
   v1 = v >> 32;
 
   w0 = u0 * v0;
   t = u1 * v0 + (w0 >> 32);
-  w1 = t & 0xffffffffL;
+  w1 = t & 0xFFFFFFFFL;
   w2 = t >> 32;
   w1 = u0 * v1 + w1;
 
@@ -3103,7 +2967,9 @@ void Simulator::VisitSystem(Instruction* instr) {
   } else if (instr->Mask(SystemHintFMask) == SystemHintFixed) {
     DCHECK(instr->Mask(SystemHintMask) == HINT);
     switch (instr->ImmHint()) {
-      case NOP: break;
+      case NOP:
+      case CSDB:
+        break;
       default: UNIMPLEMENTED();
     }
   } else if (instr->Mask(MemBarrierFMask) == MemBarrierFixed) {
@@ -3143,15 +3009,15 @@ bool Simulator::GetValue(const char* desc, int64_t* value) {
 
 
 bool Simulator::PrintValue(const char* desc) {
-  if (strcmp(desc, "csp") == 0) {
+  if (strcmp(desc, "sp") == 0) {
     DCHECK(CodeFromName(desc) == static_cast<int>(kSPRegInternalCode));
-    PrintF(stream_, "%s csp:%s 0x%016" PRIx64 "%s\n",
-        clr_reg_name, clr_reg_value, xreg(31, Reg31IsStackPointer), clr_normal);
+    PrintF(stream_, "%s sp:%s 0x%016" PRIx64 "%s\n", clr_reg_name,
+           clr_reg_value, xreg(31, Reg31IsStackPointer), clr_normal);
     return true;
-  } else if (strcmp(desc, "wcsp") == 0) {
+  } else if (strcmp(desc, "wsp") == 0) {
     DCHECK(CodeFromName(desc) == static_cast<int>(kSPRegInternalCode));
-    PrintF(stream_, "%s wcsp:%s 0x%08" PRIx32 "%s\n",
-        clr_reg_name, clr_reg_value, wreg(31, Reg31IsStackPointer), clr_normal);
+    PrintF(stream_, "%s wsp:%s 0x%08" PRIx32 "%s\n", clr_reg_name,
+           clr_reg_value, wreg(31, Reg31IsStackPointer), clr_normal);
     return true;
   }
 
@@ -3344,7 +3210,7 @@ void Simulator::Debug() {
         int next_arg = 1;
 
         if (strcmp(cmd, "stack") == 0) {
-          cur = reinterpret_cast<int64_t*>(jssp());
+          cur = reinterpret_cast<int64_t*>(sp());
 
         } else {  // "mem"
           int64_t value;
@@ -3381,7 +3247,7 @@ void Simulator::Debug() {
             PrintF(" (");
             if ((value & kSmiTagMask) == 0) {
               STATIC_ASSERT(kSmiValueSize == 32);
-              int32_t untagged = (value >> kSmiShift) & 0xffffffff;
+              int32_t untagged = (value >> kSmiShift) & 0xFFFFFFFF;
               PrintF("smi %" PRId32, untagged);
             } else {
               obj->ShortPrint();
@@ -4344,7 +4210,7 @@ void Simulator::VisitNEONByIndexedElement(Instruction* instr) {
   int rm_reg = instr->Rm();
   int index = (instr->NEONH() << 1) | instr->NEONL();
   if (instr->NEONSize() == 1) {
-    rm_reg &= 0xf;
+    rm_reg &= 0xF;
     index = (index << 1) | instr->NEONM();
   }
 
@@ -4543,15 +4409,18 @@ void Simulator::NEONLoadStoreMultiStructHelper(const Instruction* instr,
     case NEON_LD1_4v:
     case NEON_LD1_4v_post:
       ld1(vf, vreg(reg[3]), addr[3]);
-      count++;  // Fall through.
+      count++;
+      V8_FALLTHROUGH;
     case NEON_LD1_3v:
     case NEON_LD1_3v_post:
       ld1(vf, vreg(reg[2]), addr[2]);
-      count++;  // Fall through.
+      count++;
+      V8_FALLTHROUGH;
     case NEON_LD1_2v:
     case NEON_LD1_2v_post:
       ld1(vf, vreg(reg[1]), addr[1]);
-      count++;  // Fall through.
+      count++;
+      V8_FALLTHROUGH;
     case NEON_LD1_1v:
     case NEON_LD1_1v_post:
       ld1(vf, vreg(reg[0]), addr[0]);
@@ -4559,15 +4428,18 @@ void Simulator::NEONLoadStoreMultiStructHelper(const Instruction* instr,
     case NEON_ST1_4v:
     case NEON_ST1_4v_post:
       st1(vf, vreg(reg[3]), addr[3]);
-      count++;  // Fall through.
+      count++;
+      V8_FALLTHROUGH;
     case NEON_ST1_3v:
     case NEON_ST1_3v_post:
       st1(vf, vreg(reg[2]), addr[2]);
-      count++;  // Fall through.
+      count++;
+      V8_FALLTHROUGH;
     case NEON_ST1_2v:
     case NEON_ST1_2v_post:
       st1(vf, vreg(reg[1]), addr[1]);
-      count++;  // Fall through.
+      count++;
+      V8_FALLTHROUGH;
     case NEON_ST1_1v:
     case NEON_ST1_1v_post:
       st1(vf, vreg(reg[0]), addr[0]);
@@ -4680,7 +4552,8 @@ void Simulator::NEONLoadStoreSingleStructHelper(const Instruction* instr,
     case NEON_LD3_b_post:
     case NEON_LD4_b:
     case NEON_LD4_b_post:
-      do_load = true;  // Fall through.
+      do_load = true;
+      V8_FALLTHROUGH;
     case NEON_ST1_b:
     case NEON_ST1_b_post:
     case NEON_ST2_b:
@@ -4699,7 +4572,8 @@ void Simulator::NEONLoadStoreSingleStructHelper(const Instruction* instr,
     case NEON_LD3_h_post:
     case NEON_LD4_h:
     case NEON_LD4_h_post:
-      do_load = true;  // Fall through.
+      do_load = true;
+      V8_FALLTHROUGH;
     case NEON_ST1_h:
     case NEON_ST1_h_post:
     case NEON_ST2_h:
@@ -4719,7 +4593,8 @@ void Simulator::NEONLoadStoreSingleStructHelper(const Instruction* instr,
     case NEON_LD3_s_post:
     case NEON_LD4_s:
     case NEON_LD4_s_post:
-      do_load = true;  // Fall through.
+      do_load = true;
+      V8_FALLTHROUGH;
     case NEON_ST1_s:
     case NEON_ST1_s_post:
     case NEON_ST2_s:
@@ -4909,9 +4784,9 @@ void Simulator::VisitNEONModifiedImmediate(Instruction* instr) {
     case 0x6:
       vform = (q == 1) ? kFormat4S : kFormat2S;
       if (cmode_0 == 0) {
-        imm = imm8 << 8 | 0x000000ff;
+        imm = imm8 << 8 | 0x000000FF;
       } else {
-        imm = imm8 << 16 | 0x0000ffff;
+        imm = imm8 << 16 | 0x0000FFFF;
       }
       break;
     case 0x7:
@@ -4923,10 +4798,10 @@ void Simulator::VisitNEONModifiedImmediate(Instruction* instr) {
         imm = 0;
         for (int i = 0; i < 8; ++i) {
           if (imm8 & (1 << i)) {
-            imm |= (UINT64_C(0xff) << (8 * i));
+            imm |= (UINT64_C(0xFF) << (8 * i));
           }
         }
-      } else {  // cmode_0 == 1, cmode == 0xf.
+      } else {  // cmode_0 == 1, cmode == 0xF.
         if (op_bit == 0) {
           vform = q ? kFormat4S : kFormat2S;
           imm = bit_cast<uint32_t>(instr->ImmNEONFP32());
@@ -4934,7 +4809,7 @@ void Simulator::VisitNEONModifiedImmediate(Instruction* instr) {
           vform = kFormat2D;
           imm = bit_cast<uint64_t>(instr->ImmNEONFP64());
         } else {
-          DCHECK((q == 0) && (op_bit == 1) && (cmode == 0xf));
+          DCHECK((q == 0) && (op_bit == 1) && (cmode == 0xF));
           VisitUnallocated(instr);
         }
       }
@@ -5278,7 +5153,7 @@ void Simulator::VisitNEONScalarByIndexedElement(Instruction* instr) {
   int rm_reg = instr->Rm();
   int index = (instr->NEONH() << 1) | instr->NEONL();
   if (instr->NEONSize() == 1) {
-    rm_reg &= 0xf;
+    rm_reg &= 0xF;
     index = (index << 1) | instr->NEONM();
   }
 

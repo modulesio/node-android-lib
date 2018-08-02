@@ -57,6 +57,24 @@ RUNTIME_FUNCTION(Runtime_CompileOptimized_Concurrent) {
   return function->code();
 }
 
+RUNTIME_FUNCTION(Runtime_FunctionFirstExecution) {
+  HandleScope scope(isolate);
+  StackLimitCheck check(isolate);
+  DCHECK_EQ(1, args.length());
+
+  CONVERT_ARG_HANDLE_CHECKED(JSFunction, function, 0);
+  DCHECK_EQ(function->feedback_vector()->optimization_marker(),
+            OptimizationMarker::kLogFirstExecution);
+  DCHECK(FLAG_log_function_events);
+  Handle<SharedFunctionInfo> sfi(function->shared());
+  LOG(isolate, FunctionEvent("first-execution", Script::cast(sfi->script()), -1,
+                             0, sfi->StartPosition(), sfi->EndPosition(),
+                             sfi->DebugName()));
+  function->feedback_vector()->ClearOptimizationMarker();
+  // Return the code to continue execution, we don't care at this point whether
+  // this is for lazy compilation or has been eagerly complied.
+  return function->code();
+}
 
 RUNTIME_FUNCTION(Runtime_CompileOptimized_NotConcurrent) {
   HandleScope scope(isolate);
@@ -111,20 +129,15 @@ RUNTIME_FUNCTION(Runtime_InstantiateAsmJs) {
       return *result.ToHandleChecked();
     }
   }
-  // Remove wasm data, mark as broken for asm->wasm,
-  // replace code with CompileLazy, and return a smi 0 to indicate failure.
+  // Remove wasm data, mark as broken for asm->wasm, replace function code with
+  // CompileLazy, and return a smi 0 to indicate failure.
   if (function->shared()->HasAsmWasmData()) {
-    function->shared()->ClearAsmWasmData();
+    function->shared()->FlushCompiled();
   }
   function->shared()->set_is_asm_wasm_broken(true);
   DCHECK(function->code() ==
          isolate->builtins()->builtin(Builtins::kInstantiateAsmJs));
   function->set_code(isolate->builtins()->builtin(Builtins::kCompileLazy));
-  if (function->shared()->code() ==
-      isolate->builtins()->builtin(Builtins::kInstantiateAsmJs)) {
-    function->shared()->set_code(
-        isolate->builtins()->builtin(Builtins::kCompileLazy));
-  }
   return Smi::kZero;
 }
 
@@ -141,7 +154,6 @@ RUNTIME_FUNCTION(Runtime_NotifyDeoptimized) {
   TRACE_EVENT0("v8", "V8.DeoptimizeCode");
   Handle<JSFunction> function = deoptimizer->function();
   Deoptimizer::BailoutType type = deoptimizer->bailout_type();
-  bool preserve_optimized_code = deoptimizer->preserve_optimized();
 
   // TODO(turbofan): We currently need the native context to materialize
   // the arguments object, but only to get to its map.
@@ -157,7 +169,7 @@ RUNTIME_FUNCTION(Runtime_NotifyDeoptimized) {
   isolate->set_context(Context::cast(top_frame->context()));
 
   // Invalidate the underlying optimized code on non-lazy deopts.
-  if (type != Deoptimizer::LAZY && !preserve_optimized_code) {
+  if (type != Deoptimizer::LAZY) {
     Deoptimizer::DeoptimizeFunction(*function);
   }
 
@@ -273,7 +285,7 @@ RUNTIME_FUNCTION(Runtime_CompileForOnStackReplacement) {
   }
 
   if (!function->IsOptimized()) {
-    function->set_code(function->shared()->code());
+    function->set_code(function->shared()->GetCode());
   }
   return nullptr;
 }

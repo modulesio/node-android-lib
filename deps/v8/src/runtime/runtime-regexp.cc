@@ -529,7 +529,7 @@ void TruncateRegexpIndicesList(Isolate* isolate) {
 }  // namespace
 
 template <typename ResultSeqString>
-MUST_USE_RESULT static Object* StringReplaceGlobalAtomRegExpWithString(
+V8_WARN_UNUSED_RESULT static Object* StringReplaceGlobalAtomRegExpWithString(
     Isolate* isolate, Handle<String> subject, Handle<JSRegExp> pattern_regexp,
     Handle<String> replacement, Handle<RegExpMatchInfo> last_match_info) {
   DCHECK(subject->IsFlat());
@@ -544,7 +544,7 @@ MUST_USE_RESULT static Object* StringReplaceGlobalAtomRegExpWithString(
   int pattern_len = pattern->length();
   int replacement_len = replacement->length();
 
-  FindStringIndicesDispatch(isolate, *subject, pattern, indices, 0xffffffff);
+  FindStringIndicesDispatch(isolate, *subject, pattern, indices, 0xFFFFFFFF);
 
   if (indices->empty()) return *subject;
 
@@ -608,7 +608,7 @@ MUST_USE_RESULT static Object* StringReplaceGlobalAtomRegExpWithString(
   return *result;
 }
 
-MUST_USE_RESULT static Object* StringReplaceGlobalRegExpWithString(
+V8_WARN_UNUSED_RESULT static Object* StringReplaceGlobalRegExpWithString(
     Isolate* isolate, Handle<String> subject, Handle<JSRegExp> regexp,
     Handle<String> replacement, Handle<RegExpMatchInfo> last_match_info) {
   DCHECK(subject->IsFlat());
@@ -699,7 +699,7 @@ MUST_USE_RESULT static Object* StringReplaceGlobalRegExpWithString(
 }
 
 template <typename ResultSeqString>
-MUST_USE_RESULT static Object* StringReplaceGlobalRegExpWithEmptyString(
+V8_WARN_UNUSED_RESULT static Object* StringReplaceGlobalRegExpWithEmptyString(
     Isolate* isolate, Handle<String> subject, Handle<JSRegExp> regexp,
     Handle<RegExpMatchInfo> last_match_info) {
   DCHECK(subject->IsFlat());
@@ -834,7 +834,7 @@ RUNTIME_FUNCTION(Runtime_StringSplit) {
   int pattern_length = pattern->length();
   CHECK_LT(0, pattern_length);
 
-  if (limit == 0xffffffffu) {
+  if (limit == 0xFFFFFFFFu) {
     FixedArray* last_match_cache_unused;
     Handle<Object> cached_answer(
         RegExpResultsCache::Lookup(isolate->heap(), *subject, *pattern,
@@ -849,7 +849,7 @@ RUNTIME_FUNCTION(Runtime_StringSplit) {
     }
   }
 
-  // The limit can be very large (0xffffffffu), but since the pattern
+  // The limit can be very large (0xFFFFFFFFu), but since the pattern
   // isn't empty, we can never create more parts than ~half the length
   // of the subject.
 
@@ -890,7 +890,7 @@ RUNTIME_FUNCTION(Runtime_StringSplit) {
     });
   }
 
-  if (limit == 0xffffffffu) {
+  if (limit == 0xFFFFFFFFu) {
     if (result->HasObjectElements()) {
       RegExpResultsCache::Enter(isolate, subject, pattern, elements,
                                 isolate->factory()->empty_fixed_array(),
@@ -1300,10 +1300,9 @@ static Object* SearchRegExpMultiple(Isolate* isolate, Handle<String> subject,
 
 // Legacy implementation of RegExp.prototype[Symbol.replace] which
 // doesn't properly call the underlying exec method.
-MUST_USE_RESULT MaybeHandle<String> RegExpReplace(Isolate* isolate,
-                                                  Handle<JSRegExp> regexp,
-                                                  Handle<String> string,
-                                                  Handle<Object> replace_obj) {
+V8_WARN_UNUSED_RESULT MaybeHandle<String> RegExpReplace(
+    Isolate* isolate, Handle<JSRegExp> regexp, Handle<String> string,
+    Handle<Object> replace_obj) {
   // Functional fast-paths are dispatched directly by replace builtin.
   DCHECK(RegExpUtils::IsUnmodifiedRegExp(isolate, regexp));
   DCHECK(!replace_obj->IsCallable());
@@ -1545,9 +1544,9 @@ RUNTIME_FUNCTION(Runtime_StringReplaceNonGlobalRegExpWithFunction) {
 
 namespace {
 
-MUST_USE_RESULT MaybeHandle<Object> ToUint32(Isolate* isolate,
-                                             Handle<Object> object,
-                                             uint32_t* out) {
+V8_WARN_UNUSED_RESULT MaybeHandle<Object> ToUint32(Isolate* isolate,
+                                                   Handle<Object> object,
+                                                   uint32_t* out) {
   if (object->IsUndefined(isolate)) {
     *out = kMaxUInt32;
     return object;
@@ -1804,6 +1803,7 @@ RUNTIME_FUNCTION(Runtime_RegExpReplace) {
   uint32_t next_source_position = 0;
 
   for (const auto& result : results) {
+    HandleScope handle_scope(isolate);
     Handle<Object> captures_length_obj;
     ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
         isolate, captures_length_obj,
@@ -1917,14 +1917,6 @@ RUNTIME_FUNCTION(Runtime_RegExpReplace) {
   }
 
   RETURN_RESULT_OR_FAILURE(isolate, builder.Finish());
-}
-
-RUNTIME_FUNCTION(Runtime_RegExpExecReThrow) {
-  SealHandleScope shs(isolate);
-  DCHECK_EQ(0, args.length());
-  Object* exception = isolate->pending_exception();
-  isolate->clear_pending_exception();
-  return isolate->ReThrow(exception);
 }
 
 RUNTIME_FUNCTION(Runtime_RegExpInitializeAndCompile) {

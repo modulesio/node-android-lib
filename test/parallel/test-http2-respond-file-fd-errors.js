@@ -10,8 +10,7 @@ const fs = require('fs');
 const optionsWithTypeError = {
   offset: 'number',
   length: 'number',
-  statCheck: 'function',
-  getTrailers: 'function'
+  statCheck: 'function'
 };
 
 const types = {
@@ -43,7 +42,8 @@ server.on('stream', common.mustCall((stream) => {
       {
         type: TypeError,
         code: 'ERR_INVALID_ARG_TYPE',
-        message: 'The "fd" argument must be of type number'
+        message: 'The "fd" argument must be of type number. Received type ' +
+                 typeof types[type]
       }
     );
   });

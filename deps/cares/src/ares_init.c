@@ -950,9 +950,16 @@ static BOOL ares_IsWindowsVistaOrGreater(void)
   OSVERSIONINFO vinfo;
   memset(&vinfo, 0, sizeof(vinfo));
   vinfo.dwOSVersionInfoSize = sizeof(vinfo);
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable:4996) /* warning C4996: 'GetVersionExW': was declared deprecated */
+#endif
   if (!GetVersionEx(&vinfo) || vinfo.dwMajorVersion < 6)
     return FALSE;
   return TRUE;
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 }
 
 /* A structure to hold the string form of IPv4 and IPv6 addresses so we can
@@ -1641,6 +1648,7 @@ static int init_by_resolv_conf(ares_channel channel)
     ares_free(dns_servers);
   }
 
+
 #  ifdef HAVE___SYSTEM_PROPERTY_GET
   /* Old way using the system property still in place as
    * a fallback. Older android versions can still use this.
@@ -1656,6 +1664,25 @@ static int init_by_resolv_conf(ares_channel channel)
         status = ARES_EOF;
         break;
       }
+
+
+
+#  ifdef HAVE___SYSTEM_PROPERTY_GET
+  /* Old way using the system property still in place as
+   * a fallback. Older android versions can still use this.
+   * it's possible for older apps not not have added the new
+   * permission and we want to try to avoid breaking those.
+   *
+   * We'll only run this if we don't have any dns servers
+   * because this will get the same ones (if it works). */
+  if (status != ARES_EOF) {
+    for (i = 1; i <= MAX_DNS_PROPERTIES; i++) {
+      snprintf(propname, sizeof(propname), "%s%u", DNS_PROP_NAME_PREFIX, i);
+      if (__system_property_get(propname, propvalue) < 1) {
+        status = ARES_EOF;
+        break;
+      }
+
 
       status = config_nameserver(&servers, &nservers, propvalue);
       if (status != ARES_SUCCESS)
@@ -1983,8 +2010,10 @@ static int init_by_defaults(ares_channel channel)
         continue;
       }
       else if(res) {
-        rc = ARES_EBADNAME;
-        goto error;
+        /* Lets not treat a gethostname failure as critical, since we
+         * are ok if gethostname doesn't even exist */
+        *hostname = '\0';
+        break;
       }
 
     } while (res != 0);

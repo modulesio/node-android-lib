@@ -34,9 +34,6 @@ inline int DecodeConstantPoolLength(int instr) {
   return ((instr >> 4) & 0xfff0) | (instr & 0xf);
 }
 
-// Used in code age prologue - ldr(pc, MemOperand(pc, -4))
-const int kCodeAgeJumpInstruction = 0xe51ff004;
-
 // Number of registers in normal ARM mode.
 const int kNumRegisters = 16;
 
@@ -644,8 +641,8 @@ class Instruction {
                                            && (Bit(20) == 0)
                                            && ((Bit(7) == 0)); }
 
-  // Test for a nop instruction, which falls under type 1.
-  inline bool IsNopType1() const { return Bits(24, 0) == 0x0120F000; }
+  // Test for nop-like instructions which fall under type 1.
+  inline bool IsNopLikeType1() const { return Bits(24, 8) == 0x120F0; }
 
   // Test for a stop instruction.
   inline bool IsStop() const {

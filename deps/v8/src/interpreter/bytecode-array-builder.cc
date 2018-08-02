@@ -92,7 +92,7 @@ Handle<BytecodeArray> BytecodeArrayBuilder::ToBytecodeArray(Isolate* isolate) {
     register_count = register_optimizer_->maxiumum_register_index() + 1;
   }
 
-  Handle<FixedArray> handler_table =
+  Handle<ByteArray> handler_table =
       handler_table_builder()->ToHandlerTable(isolate);
   return bytecode_array_writer_.ToBytecodeArray(
       isolate, register_count, parameter_count(), handler_table);
@@ -701,14 +701,9 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::LoadGlobal(const AstRawString* name,
 }
 
 BytecodeArrayBuilder& BytecodeArrayBuilder::StoreGlobal(
-    const AstRawString* name, int feedback_slot, LanguageMode language_mode) {
+    const AstRawString* name, int feedback_slot) {
   size_t name_index = GetConstantPoolEntry(name);
-  if (language_mode == LanguageMode::kSloppy) {
-    OutputStaGlobalSloppy(name_index, feedback_slot);
-  } else {
-    DCHECK_EQ(language_mode, LanguageMode::kStrict);
-    OutputStaGlobalStrict(name_index, feedback_slot);
-  }
+  OutputStaGlobal(name_index, feedback_slot);
   return *this;
 }
 
@@ -869,6 +864,12 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::StoreKeyedProperty(
   return *this;
 }
 
+BytecodeArrayBuilder& BytecodeArrayBuilder::StoreInArrayLiteral(
+    Register array, Register index, int feedback_slot) {
+  OutputStaInArrayLiteral(array, index, feedback_slot);
+  return *this;
+}
+
 BytecodeArrayBuilder& BytecodeArrayBuilder::StoreHomeObjectProperty(
     Register object, int feedback_slot, LanguageMode language_mode) {
   size_t name_index = HomeObjectSymbolConstantPoolEntry();
@@ -978,8 +979,8 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::CreateEmptyObjectLiteral() {
 }
 
 BytecodeArrayBuilder& BytecodeArrayBuilder::GetTemplateObject(
-    size_t template_object_description_entry) {
-  OutputGetTemplateObject(template_object_description_entry);
+    size_t template_object_description_entry, int feedback_slot) {
+  OutputGetTemplateObject(template_object_description_entry, feedback_slot);
   return *this;
 }
 
@@ -1000,6 +1001,11 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::ToObject(Register out) {
 
 BytecodeArrayBuilder& BytecodeArrayBuilder::ToName(Register out) {
   OutputToName(out);
+  return *this;
+}
+
+BytecodeArrayBuilder& BytecodeArrayBuilder::ToString() {
+  OutputToString();
   return *this;
 }
 
@@ -1185,8 +1191,10 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::ReThrow() {
   return *this;
 }
 
-BytecodeArrayBuilder& BytecodeArrayBuilder::Abort(BailoutReason reason) {
-  OutputAbort(reason);
+BytecodeArrayBuilder& BytecodeArrayBuilder::Abort(AbortReason reason) {
+  DCHECK_LT(reason, AbortReason::kLastErrorMessage);
+  DCHECK_GE(reason, AbortReason::kNoReason);
+  OutputAbort(static_cast<int>(reason));
   return *this;
 }
 
@@ -1274,16 +1282,19 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::SuspendGenerator(
   return *this;
 }
 
-BytecodeArrayBuilder& BytecodeArrayBuilder::RestoreGeneratorState(
-    Register generator) {
-  OutputRestoreGeneratorState(generator);
+BytecodeArrayBuilder& BytecodeArrayBuilder::SwitchOnGeneratorState(
+    Register generator, BytecodeJumpTable* jump_table) {
+  DCHECK_EQ(jump_table->case_value_base(), 0);
+  BytecodeNode node(CreateSwitchOnGeneratorStateNode(
+      generator, jump_table->constant_pool_index(), jump_table->size()));
+  WriteSwitch(&node, jump_table);
+  LeaveBasicBlock();
   return *this;
 }
 
-BytecodeArrayBuilder& BytecodeArrayBuilder::RestoreGeneratorRegisters(
+BytecodeArrayBuilder& BytecodeArrayBuilder::ResumeGenerator(
     Register generator, RegisterList registers) {
-  OutputRestoreGeneratorRegisters(generator, registers,
-                                  registers.register_count());
+  OutputResumeGenerator(generator, registers, registers.register_count());
   return *this;
 }
 
@@ -1389,7 +1400,7 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::CallRuntime(
 
 BytecodeArrayBuilder& BytecodeArrayBuilder::CallRuntime(
     Runtime::FunctionId function_id, Register arg) {
-  return CallRuntime(function_id, RegisterList(arg.index(), 1));
+  return CallRuntime(function_id, RegisterList(arg));
 }
 
 BytecodeArrayBuilder& BytecodeArrayBuilder::CallRuntime(
@@ -1411,8 +1422,7 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::CallRuntimeForPair(
 
 BytecodeArrayBuilder& BytecodeArrayBuilder::CallRuntimeForPair(
     Runtime::FunctionId function_id, Register arg, RegisterList return_pair) {
-  return CallRuntimeForPair(function_id, RegisterList(arg.index(), 1),
-                            return_pair);
+  return CallRuntimeForPair(function_id, RegisterList(arg), return_pair);
 }
 
 BytecodeArrayBuilder& BytecodeArrayBuilder::CallJSRuntime(int context_index,

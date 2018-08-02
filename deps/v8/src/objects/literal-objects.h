@@ -6,6 +6,7 @@
 #define V8_OBJECTS_LITERAL_OBJECTS_H_
 
 #include "src/objects.h"
+#include "src/objects/fixed-array.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -34,6 +35,7 @@ class BoilerplateDescription : public FixedArray {
   void set_backing_store_size(Isolate* isolate, int backing_store_size);
 
   DECL_CAST(BoilerplateDescription)
+  DECL_PRINTER(BoilerplateDescription)
 
  private:
   bool has_number_of_properties() const;

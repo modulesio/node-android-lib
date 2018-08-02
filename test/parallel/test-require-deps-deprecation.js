@@ -2,8 +2,6 @@
 
 const common = require('../common');
 const assert = require('assert');
-// The v8 modules when imported leak globals. Disable global check.
-common.globalCheck = false;
 
 const deprecatedModules = [
   'node-inspect/lib/_inspect',
@@ -29,8 +27,8 @@ const deps = [
 ];
 
 common.expectWarning('DeprecationWarning', deprecatedModules.map((m) => {
-  return `Requiring Node.js-bundled '${m}' module is deprecated. ` +
-         'Please install the necessary module locally.';
+  return [`Requiring Node.js-bundled '${m}' module is deprecated. ` +
+         'Please install the necessary module locally.', 'DEP0084'];
 }));
 
 for (const m of deprecatedModules) {
@@ -53,3 +51,6 @@ for (const m of deps) {
   }
   assert.notStrictEqual(path, m);
 }
+
+// The V8 modules add the WebInspector to the globals.
+common.allowGlobals(global.WebInspector);

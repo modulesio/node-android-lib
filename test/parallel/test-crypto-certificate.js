@@ -29,16 +29,12 @@ const crypto = require('crypto');
 const { Certificate } = crypto;
 const fixtures = require('../common/fixtures');
 
-crypto.DEFAULT_ENCODING = 'buffer';
-
 // Test Certificates
 const spkacValid = fixtures.readSync('spkac.valid');
 const spkacFail = fixtures.readSync('spkac.fail');
 const spkacPem = fixtures.readSync('spkac.pem');
 
-{
-  // Test instance methods
-  const certificate = new Certificate();
+function checkMethods(certificate) {
 
   assert.strictEqual(certificate.verifySpkac(spkacValid), true);
   assert.strictEqual(certificate.verifySpkac(spkacFail), false);
@@ -57,60 +53,39 @@ const spkacPem = fixtures.readSync('spkac.pem');
 }
 
 {
+  // Test instance methods
+  checkMethods(new Certificate());
+}
+
+{
   // Test static methods
-  assert.strictEqual(Certificate.verifySpkac(spkacValid), true);
-  assert.strictEqual(Certificate.verifySpkac(spkacFail), false);
-
-  assert.strictEqual(
-    stripLineEndings(Certificate.exportPublicKey(spkacValid).toString('utf8')),
-    stripLineEndings(spkacPem.toString('utf8'))
-  );
-  assert.strictEqual(Certificate.exportPublicKey(spkacFail), '');
-
-  assert.strictEqual(
-    Certificate.exportChallenge(spkacValid).toString('utf8'),
-    'fb9ab814-6677-42a4-a60c-f905d1a6924d'
-  );
-  assert.strictEqual(Certificate.exportChallenge(spkacFail), '');
+  checkMethods(Certificate);
 }
 
 function stripLineEndings(obj) {
   return obj.replace(/\n/g, '');
 }
 
-// direct call Certificate() should return instance
+// Direct call Certificate() should return instance
 assert(Certificate() instanceof Certificate);
 
-[1, {}, [], Infinity, true, 'test', undefined, null].forEach((i) => {
-  common.expectsError(
-    () => Certificate.verifySpkac(i),
+[1, {}, [], Infinity, true, 'test', undefined, null].forEach((val) => {
+  assert.throws(
+    () => Certificate.verifySpkac(val),
     {
       code: 'ERR_INVALID_ARG_TYPE',
-      type: TypeError,
       message: 'The "spkac" argument must be one of type Buffer, TypedArray, ' +
-               'or DataView'
+               `or DataView. Received type ${typeof val}`
     }
   );
 });
 
-[1, {}, [], Infinity, true, undefined, null].forEach((i) => {
-  common.expectsError(
-    () => Certificate.exportPublicKey(i),
-    {
-      code: 'ERR_INVALID_ARG_TYPE',
-      type: TypeError,
-      message: 'The "spkac" argument must be one of type string, Buffer,' +
-               ' TypedArray, or DataView'
-    }
-  );
-
-  common.expectsError(
-    () => Certificate.exportChallenge(i),
-    {
-      code: 'ERR_INVALID_ARG_TYPE',
-      type: TypeError,
-      message: 'The "spkac" argument must be one of type string, Buffer,' +
-               ' TypedArray, or DataView'
-    }
-  );
+[1, {}, [], Infinity, true, undefined, null].forEach((val) => {
+  const errObj = {
+    code: 'ERR_INVALID_ARG_TYPE',
+    message: 'The "spkac" argument must be one of type string, Buffer,' +
+             ` TypedArray, or DataView. Received type ${typeof val}`
+  };
+  assert.throws(() => Certificate.exportPublicKey(val), errObj);
+  assert.throws(() => Certificate.exportChallenge(val), errObj);
 });

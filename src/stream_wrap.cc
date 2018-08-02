@@ -32,7 +32,6 @@
 #include "udp_wrap.h"
 #include "util-inl.h"
 
-#include <stdlib.h>  // abort()
 #include <string.h>  // memcpy()
 #include <limits.h>  // INT_MAX
 
@@ -60,26 +59,27 @@ void LibuvStreamWrap::Initialize(Local<Object> target,
   auto is_construct_call_callback =
       [](const FunctionCallbackInfo<Value>& args) {
     CHECK(args.IsConstructCall());
-    ClearWrap(args.This());
+    StreamReq::ResetObject(args.This());
   };
   Local<FunctionTemplate> sw =
       FunctionTemplate::New(env->isolate(), is_construct_call_callback);
-  sw->InstanceTemplate()->SetInternalFieldCount(1);
+  sw->InstanceTemplate()->SetInternalFieldCount(StreamReq::kStreamReqField + 1);
   Local<String> wrapString =
       FIXED_ONE_BYTE_STRING(env->isolate(), "ShutdownWrap");
   sw->SetClassName(wrapString);
   AsyncWrap::AddWrapMethods(env, sw);
   target->Set(wrapString, sw->GetFunction());
+  env->set_shutdown_wrap_template(sw->InstanceTemplate());
 
   Local<FunctionTemplate> ww =
       FunctionTemplate::New(env->isolate(), is_construct_call_callback);
-  ww->InstanceTemplate()->SetInternalFieldCount(1);
+  ww->InstanceTemplate()->SetInternalFieldCount(StreamReq::kStreamReqField + 1);
   Local<String> writeWrapString =
       FIXED_ONE_BYTE_STRING(env->isolate(), "WriteWrap");
   ww->SetClassName(writeWrapString);
   AsyncWrap::AddWrapMethods(env, ww);
   target->Set(writeWrapString, ww->GetFunction());
-  env->set_write_wrap_constructor_function(ww->GetFunction());
+  env->set_write_wrap_template(ww->InstanceTemplate());
 }
 
 
@@ -93,14 +93,11 @@ LibuvStreamWrap::LibuvStreamWrap(Environment* env,
                  provider),
       StreamBase(env),
       stream_(stream) {
-  set_alloc_cb({ OnAllocImpl, this });
-  set_read_cb({ OnReadImpl, this });
 }
 
 
 void LibuvStreamWrap::AddMethods(Environment* env,
-                                 v8::Local<v8::FunctionTemplate> target,
-                                 int flags) {
+                                 v8::Local<v8::FunctionTemplate> target) {
   Local<FunctionTemplate> get_write_queue_size =
       FunctionTemplate::New(env->isolate(),
                             GetWriteQueueSize,
@@ -112,17 +109,19 @@ void LibuvStreamWrap::AddMethods(Environment* env,
       Local<FunctionTemplate>(),
       static_cast<PropertyAttribute>(ReadOnly | DontDelete));
   env->SetProtoMethod(target, "setBlocking", SetBlocking);
-  StreamBase::AddMethods<LibuvStreamWrap>(env, target, flags);
+  StreamBase::AddMethods<LibuvStreamWrap>(env, target);
 }
 
 
 int LibuvStreamWrap::GetFD() {
+#ifdef _WIN32
+  return fd_;
+#else
   int fd = -1;
-#if !defined(_WIN32)
   if (stream() != nullptr)
     uv_fileno(reinterpret_cast<uv_handle_t*>(stream()), &fd);
-#endif
   return fd;
+#endif
 }
 
 
@@ -147,7 +146,13 @@ bool LibuvStreamWrap::IsIPCPipe() {
 
 
 int LibuvStreamWrap::ReadStart() {
-  return uv_read_start(stream(), OnAlloc, OnRead);
+  return uv_read_start(stream(), [](uv_handle_t* handle,
+                                    size_t suggested_size,
+                                    uv_buf_t* buf) {
+    static_cast<LibuvStreamWrap*>(handle->data)->OnUvAlloc(suggested_size, buf);
+  }, [](uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
+    static_cast<LibuvStreamWrap*>(stream->data)->OnUvRead(nread, buf);
+  });
 }
 
 
@@ -156,23 +161,13 @@ int LibuvStreamWrap::ReadStop() {
 }
 
 
-void LibuvStreamWrap::OnAlloc(uv_handle_t* handle,
-                         size_t suggested_size,
-                         uv_buf_t* buf) {
-  LibuvStreamWrap* wrap = static_cast<LibuvStreamWrap*>(handle->data);
-  HandleScope scope(wrap->env()->isolate());
-  Context::Scope context_scope(wrap->env()->context());
+void LibuvStreamWrap::OnUvAlloc(size_t suggested_size, uv_buf_t* buf) {
+  HandleScope scope(env()->isolate());
+  Context::Scope context_scope(env()->context());
 
-  CHECK_EQ(wrap->stream(), reinterpret_cast<uv_stream_t*>(handle));
-
-  return wrap->EmitAlloc(suggested_size, buf);
+  *buf = EmitAlloc(suggested_size);
 }
 
-
-void LibuvStreamWrap::OnAllocImpl(size_t size, uv_buf_t* buf, void* ctx) {
-  buf->base = node::Malloc(size);
-  buf->len = size;
-}
 
 
 template <class WrapType, class UVType>
@@ -196,74 +191,47 @@ static Local<Object> AcceptHandle(Environment* env, LibuvStreamWrap* parent) {
 }
 
 
-void LibuvStreamWrap::OnReadImpl(ssize_t nread,
-                            const uv_buf_t* buf,
-                            uv_handle_type pending,
-                            void* ctx) {
-  LibuvStreamWrap* wrap = static_cast<LibuvStreamWrap*>(ctx);
-  Environment* env = wrap->env();
-  HandleScope handle_scope(env->isolate());
-  Context::Scope context_scope(env->context());
-
-  Local<Object> pending_obj;
-
-  if (nread < 0)  {
-    if (buf->base != nullptr)
-      free(buf->base);
-    wrap->EmitData(nread, Local<Object>(), pending_obj);
-    return;
-  }
-
-  if (nread == 0) {
-    if (buf->base != nullptr)
-      free(buf->base);
-    return;
-  }
-
-  CHECK_LE(static_cast<size_t>(nread), buf->len);
-  char* base = node::Realloc(buf->base, nread);
-
-  if (pending == UV_TCP) {
-    pending_obj = AcceptHandle<TCPWrap, uv_tcp_t>(env, wrap);
-  } else if (pending == UV_NAMED_PIPE) {
-    pending_obj = AcceptHandle<PipeWrap, uv_pipe_t>(env, wrap);
-  } else if (pending == UV_UDP) {
-    pending_obj = AcceptHandle<UDPWrap, uv_udp_t>(env, wrap);
-  } else {
-    CHECK_EQ(pending, UV_UNKNOWN_HANDLE);
-  }
-
-  Local<Object> obj = Buffer::New(env, base, nread).ToLocalChecked();
-  wrap->EmitData(nread, obj, pending_obj);
-}
-
-
-void LibuvStreamWrap::OnRead(uv_stream_t* handle,
-                        ssize_t nread,
-                        const uv_buf_t* buf) {
-  LibuvStreamWrap* wrap = static_cast<LibuvStreamWrap*>(handle->data);
-  HandleScope scope(wrap->env()->isolate());
-  Context::Scope context_scope(wrap->env()->context());
+void LibuvStreamWrap::OnUvRead(ssize_t nread, const uv_buf_t* buf) {
+  HandleScope scope(env()->isolate());
+  Context::Scope context_scope(env()->context());
   uv_handle_type type = UV_UNKNOWN_HANDLE;
 
-  if (wrap->is_named_pipe_ipc() &&
-      uv_pipe_pending_count(reinterpret_cast<uv_pipe_t*>(handle)) > 0) {
-    type = uv_pipe_pending_type(reinterpret_cast<uv_pipe_t*>(handle));
+  if (is_named_pipe_ipc() &&
+      uv_pipe_pending_count(reinterpret_cast<uv_pipe_t*>(stream())) > 0) {
+    type = uv_pipe_pending_type(reinterpret_cast<uv_pipe_t*>(stream()));
   }
 
   // We should not be getting this callback if someone as already called
   // uv_close() on the handle.
-  CHECK_EQ(wrap->persistent().IsEmpty(), false);
+  CHECK_EQ(persistent().IsEmpty(), false);
 
   if (nread > 0) {
-    if (wrap->is_tcp()) {
+    if (is_tcp()) {
       NODE_COUNT_NET_BYTES_RECV(nread);
-    } else if (wrap->is_named_pipe()) {
+    } else if (is_named_pipe()) {
       NODE_COUNT_PIPE_BYTES_RECV(nread);
+    }
+
+    Local<Object> pending_obj;
+
+    if (type == UV_TCP) {
+      pending_obj = AcceptHandle<TCPWrap, uv_tcp_t>(env(), this);
+    } else if (type == UV_NAMED_PIPE) {
+      pending_obj = AcceptHandle<PipeWrap, uv_pipe_t>(env(), this);
+    } else if (type == UV_UDP) {
+      pending_obj = AcceptHandle<UDPWrap, uv_udp_t>(env(), this);
+    } else {
+      CHECK_EQ(type, UV_UNKNOWN_HANDLE);
+    }
+
+    if (!pending_obj.IsEmpty()) {
+      object()->Set(env()->context(),
+                    env()->pending_handle_string(),
+                    pending_obj).FromJust();
     }
   }
 
-  wrap->EmitRead(nread, buf, type);
+  EmitRead(nread, *buf);
 }
 
 
@@ -294,18 +262,28 @@ void LibuvStreamWrap::SetBlocking(const FunctionCallbackInfo<Value>& args) {
   args.GetReturnValue().Set(uv_stream_set_blocking(wrap->stream(), enable));
 }
 
+typedef SimpleShutdownWrap<ReqWrap<uv_shutdown_t>> LibuvShutdownWrap;
+typedef SimpleWriteWrap<ReqWrap<uv_write_t>> LibuvWriteWrap;
 
-int LibuvStreamWrap::DoShutdown(ShutdownWrap* req_wrap) {
-  int err;
-  err = uv_shutdown(req_wrap->req(), stream(), AfterUvShutdown);
-  req_wrap->Dispatched();
-  return err;
+ShutdownWrap* LibuvStreamWrap::CreateShutdownWrap(Local<Object> object) {
+  return new LibuvShutdownWrap(this, object);
+}
+
+WriteWrap* LibuvStreamWrap::CreateWriteWrap(Local<Object> object) {
+  return new LibuvWriteWrap(this, object);
+}
+
+
+int LibuvStreamWrap::DoShutdown(ShutdownWrap* req_wrap_) {
+  LibuvShutdownWrap* req_wrap = static_cast<LibuvShutdownWrap*>(req_wrap_);
+  return req_wrap->Dispatch(uv_shutdown, stream(), AfterUvShutdown);
 }
 
 
 void LibuvStreamWrap::AfterUvShutdown(uv_shutdown_t* req, int status) {
-  ShutdownWrap* req_wrap = ShutdownWrap::from_req(req);
-  CHECK_NE(req_wrap, nullptr);
+  LibuvShutdownWrap* req_wrap = static_cast<LibuvShutdownWrap*>(
+      LibuvShutdownWrap::from_req(req));
+  CHECK_NOT_NULL(req_wrap);
   HandleScope scope(req_wrap->env()->isolate());
   Context::Scope context_scope(req_wrap->env()->context());
   req_wrap->Done(status);
@@ -352,15 +330,21 @@ int LibuvStreamWrap::DoTryWrite(uv_buf_t** bufs, size_t* count) {
 }
 
 
-int LibuvStreamWrap::DoWrite(WriteWrap* w,
-                        uv_buf_t* bufs,
-                        size_t count,
-                        uv_stream_t* send_handle) {
+int LibuvStreamWrap::DoWrite(WriteWrap* req_wrap,
+                             uv_buf_t* bufs,
+                             size_t count,
+                             uv_stream_t* send_handle) {
+  LibuvWriteWrap* w = static_cast<LibuvWriteWrap*>(req_wrap);
   int r;
   if (send_handle == nullptr) {
-    r = uv_write(w->req(), stream(), bufs, count, AfterUvWrite);
+    r = w->Dispatch(uv_write, stream(), bufs, count, AfterUvWrite);
   } else {
-    r = uv_write2(w->req(), stream(), bufs, count, send_handle, AfterUvWrite);
+    r = w->Dispatch(uv_write2,
+                    stream(),
+                    bufs,
+                    count,
+                    send_handle,
+                    AfterUvWrite);
   }
 
   if (!r) {
@@ -374,24 +358,18 @@ int LibuvStreamWrap::DoWrite(WriteWrap* w,
     }
   }
 
-  w->Dispatched();
-
   return r;
 }
 
 
 
 void LibuvStreamWrap::AfterUvWrite(uv_write_t* req, int status) {
-  WriteWrap* req_wrap = WriteWrap::from_req(req);
-  CHECK_NE(req_wrap, nullptr);
+  LibuvWriteWrap* req_wrap = static_cast<LibuvWriteWrap*>(
+      LibuvWriteWrap::from_req(req));
+  CHECK_NOT_NULL(req_wrap);
   HandleScope scope(req_wrap->env()->isolate());
   Context::Scope context_scope(req_wrap->env()->context());
   req_wrap->Done(status);
-}
-
-
-void LibuvStreamWrap::AfterWrite(WriteWrap* w, int status) {
-  StreamBase::AfterWrite(w, status);
 }
 
 }  // namespace node

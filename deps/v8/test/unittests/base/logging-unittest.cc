@@ -32,30 +32,34 @@ namespace {
 }  // namespace
 
 TEST(LoggingTest, CheckEQImpl) {
-  CHECK_SUCCEED(EQ, 0.0, 0.0)
-  CHECK_SUCCEED(EQ, 0.0, -0.0)
-  CHECK_SUCCEED(EQ, -0.0, 0.0)
-  CHECK_SUCCEED(EQ, -0.0, -0.0)
+  CHECK_SUCCEED(EQ, 0.0, 0.0);
+  CHECK_SUCCEED(EQ, 0.0, -0.0);
+  CHECK_SUCCEED(EQ, -0.0, 0.0);
+  CHECK_SUCCEED(EQ, -0.0, -0.0);
 }
 
 TEST(LoggingTest, CompareSignedMismatch) {
-  CHECK_SUCCEED(EQ, static_cast<int32_t>(14), static_cast<uint32_t>(14))
-  CHECK_FAIL(EQ, static_cast<int32_t>(14), static_cast<uint32_t>(15))
-  CHECK_FAIL(EQ, static_cast<int32_t>(-1), static_cast<uint32_t>(-1))
-  CHECK_SUCCEED(LT, static_cast<int32_t>(-1), static_cast<uint32_t>(0))
-  CHECK_SUCCEED(LT, static_cast<int32_t>(-1), static_cast<uint32_t>(-1))
-  CHECK_SUCCEED(LE, static_cast<int32_t>(-1), static_cast<uint32_t>(0))
-  CHECK_SUCCEED(LE, static_cast<int32_t>(55), static_cast<uint32_t>(55))
-  CHECK_SUCCEED(LT, static_cast<int32_t>(55), static_cast<uint32_t>(0x7fffff00))
-  CHECK_SUCCEED(LE, static_cast<int32_t>(55), static_cast<uint32_t>(0x7fffff00))
-  CHECK_SUCCEED(GE, static_cast<uint32_t>(0x7fffff00), static_cast<int32_t>(55))
-  CHECK_SUCCEED(GT, static_cast<uint32_t>(0x7fffff00), static_cast<int32_t>(55))
-  CHECK_SUCCEED(GT, static_cast<uint32_t>(-1), static_cast<int32_t>(-1))
-  CHECK_SUCCEED(GE, static_cast<uint32_t>(0), static_cast<int32_t>(-1))
-  CHECK_SUCCEED(LT, static_cast<int8_t>(-1), static_cast<uint32_t>(0))
-  CHECK_SUCCEED(GT, static_cast<uint64_t>(0x7f01010101010101), 0)
-  CHECK_SUCCEED(LE, static_cast<int64_t>(0xff01010101010101),
-                static_cast<uint8_t>(13))
+  CHECK_SUCCEED(EQ, static_cast<int32_t>(14), static_cast<uint32_t>(14));
+  CHECK_FAIL(EQ, static_cast<int32_t>(14), static_cast<uint32_t>(15));
+  CHECK_FAIL(EQ, static_cast<int32_t>(-1), static_cast<uint32_t>(-1));
+  CHECK_SUCCEED(LT, static_cast<int32_t>(-1), static_cast<uint32_t>(0));
+  CHECK_SUCCEED(LT, static_cast<int32_t>(-1), static_cast<uint32_t>(-1));
+  CHECK_SUCCEED(LE, static_cast<int32_t>(-1), static_cast<uint32_t>(0));
+  CHECK_SUCCEED(LE, static_cast<int32_t>(55), static_cast<uint32_t>(55));
+  CHECK_SUCCEED(LT, static_cast<int32_t>(55),
+                static_cast<uint32_t>(0x7FFFFF00));
+  CHECK_SUCCEED(LE, static_cast<int32_t>(55),
+                static_cast<uint32_t>(0x7FFFFF00));
+  CHECK_SUCCEED(GE, static_cast<uint32_t>(0x7FFFFF00),
+                static_cast<int32_t>(55));
+  CHECK_SUCCEED(GT, static_cast<uint32_t>(0x7FFFFF00),
+                static_cast<int32_t>(55));
+  CHECK_SUCCEED(GT, static_cast<uint32_t>(-1), static_cast<int32_t>(-1));
+  CHECK_SUCCEED(GE, static_cast<uint32_t>(0), static_cast<int32_t>(-1));
+  CHECK_SUCCEED(LT, static_cast<int8_t>(-1), static_cast<uint32_t>(0));
+  CHECK_SUCCEED(GT, static_cast<uint64_t>(0x7F01010101010101), 0);
+  CHECK_SUCCEED(LE, static_cast<int64_t>(0xFF01010101010101),
+                static_cast<uint8_t>(13));
 }
 
 TEST(LoggingTest, CompareAgainstStaticConstPointer) {
@@ -243,6 +247,42 @@ TEST(LoggingDeathTest, V8_DcheckCanBeOverridden) {
       },
       "Dread pirate");
 }
+
+#if defined(DEBUG)
+namespace {
+int g_log_sink_call_count = 0;
+void DcheckCountFunction(const char* file, int line, const char* message) {
+  ++g_log_sink_call_count;
+}
+
+void DcheckEmptyFunction1() {
+  // Provide a body so that Release builds do not cause the compiler to
+  // optimize DcheckEmptyFunction1 and DcheckEmptyFunction2 as a single
+  // function, which breaks the Dcheck tests below.
+  // Note that this function is never actually called.
+  g_log_sink_call_count += 42;
+}
+void DcheckEmptyFunction2() {}
+
+}  // namespace
+
+TEST(LoggingTest, LogFunctionPointers) {
+  v8::base::SetDcheckFunction(&DcheckCountFunction);
+  g_log_sink_call_count = 0;
+  void (*fp1)() = DcheckEmptyFunction1;
+  void (*fp2)() = DcheckEmptyFunction2;
+  void (*fp3)() = DcheckEmptyFunction1;
+  DCHECK_EQ(fp1, DcheckEmptyFunction1);
+  DCHECK_EQ(fp1, fp3);
+  EXPECT_EQ(0, g_log_sink_call_count);
+  DCHECK_EQ(fp1, fp2);
+  EXPECT_EQ(1, g_log_sink_call_count);
+  std::string* error_message =
+      CheckEQImpl<decltype(fp1), decltype(fp2)>(fp1, fp2, "");
+  EXPECT_NE(*error_message, "(1 vs 1)");
+  delete error_message;
+}
+#endif  // defined(DEBUG)
 
 }  // namespace logging_unittest
 }  // namespace base

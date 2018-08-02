@@ -297,8 +297,8 @@ class TyperTest : public TypedGraphTest {
 
 namespace {
 
-int32_t shift_left(int32_t x, int32_t y) { return x << (y & 0x1f); }
-int32_t shift_right(int32_t x, int32_t y) { return x >> (y & 0x1f); }
+int32_t shift_left(int32_t x, int32_t y) { return x << (y & 0x1F); }
+int32_t shift_right(int32_t x, int32_t y) { return x >> (y & 0x1F); }
 int32_t bit_or(int32_t x, int32_t y) { return x | y; }
 int32_t bit_and(int32_t x, int32_t y) { return x & y; }
 int32_t bit_xor(int32_t x, int32_t y) { return x ^ y; }
@@ -491,7 +491,6 @@ TEST_MONOTONICITY(ObjectIsString)
 TEST_MONOTONICITY(ObjectIsSymbol)
 TEST_MONOTONICITY(ObjectIsUndetectable)
 TEST_MONOTONICITY(TypeOf)
-TEST_MONOTONICITY(ClassOf)
 TEST_MONOTONICITY(ToBoolean)
 #undef TEST_MONOTONICITY
 

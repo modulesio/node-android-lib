@@ -15,6 +15,10 @@
 namespace v8 {
 namespace internal {
 
+class BigInt;
+class ValueDeserializer;
+class ValueSerializer;
+
 // BigIntBase is just the raw data object underlying a BigInt. Use with care!
 // Most code should be using BigInts instead.
 class BigIntBase : public HeapObject {
@@ -24,15 +28,22 @@ class BigIntBase : public HeapObject {
     return LengthBits::decode(static_cast<uint32_t>(bitfield));
   }
 
-  // The maximum length that the current implementation supports would be
-  // kMaxInt / kDigitBits. However, we use a lower limit for now, because
-  // raising it later is easier than lowering it.
-  // Support up to 1 million bits.
-  static const int kMaxLengthBits = 1024 * 1024;
+  // Increasing kMaxLength will require code changes.
+  static const int kMaxLengthBits = kMaxInt - kPointerSize * kBitsPerByte - 1;
   static const int kMaxLength = kMaxLengthBits / (kPointerSize * kBitsPerByte);
 
+  static const int kLengthFieldBits = 30;
+  STATIC_ASSERT(kMaxLength <= ((1 << kLengthFieldBits) - 1));
+  class SignBits : public BitField<bool, 0, 1> {};
+  class LengthBits : public BitField<int, SignBits::kNext, kLengthFieldBits> {};
+  STATIC_ASSERT(LengthBits::kNext <= 32);
+
+  static const int kBitfieldOffset = HeapObject::kHeaderSize;
+  static const int kDigitsOffset = kBitfieldOffset + kPointerSize;
+  static const int kHeaderSize = kDigitsOffset;
+
  private:
-  friend class BigInt;
+  friend class ::v8::internal::BigInt;  // MSVC wants full namespace.
   friend class MutableBigInt;
 
   typedef uintptr_t digit_t;
@@ -43,15 +54,6 @@ class BigIntBase : public HeapObject {
   static const int kDigitBits = kDigitSize * kBitsPerByte;
   static const int kHalfDigitBits = kDigitBits / 2;
   static const digit_t kHalfDigitMask = (1ull << kHalfDigitBits) - 1;
-
-  static const int kBitfieldOffset = HeapObject::kHeaderSize;
-  static const int kDigitsOffset = kBitfieldOffset + kPointerSize;
-  static const int kHeaderSize = kDigitsOffset;
-
-  static const int kLengthFieldBits = 20;
-  STATIC_ASSERT(kMaxLength <= ((1 << kLengthFieldBits) - 1));
-  class LengthBits : public BitField<int, 0, kLengthFieldBits> {};
-  class SignBits : public BitField<bool, LengthBits::kNext, 1> {};
 
   // sign() == true means negative.
   inline bool sign() const {
@@ -140,6 +142,16 @@ class V8_EXPORT_PRIVATE BigInt : public BigIntBase {
   static Handle<BigInt> AsIntN(uint64_t n, Handle<BigInt> x);
   static MaybeHandle<BigInt> AsUintN(uint64_t n, Handle<BigInt> x);
 
+  static Handle<BigInt> FromInt64(Isolate* isolate, int64_t n);
+  static Handle<BigInt> FromUint64(Isolate* isolate, uint64_t n);
+  static MaybeHandle<BigInt> FromWords64(Isolate* isolate, int sign_bit,
+                                         int words64_count,
+                                         const uint64_t* words);
+  int64_t AsInt64(bool* lossless = nullptr);
+  uint64_t AsUint64(bool* lossless = nullptr);
+  int Words64Count();
+  void ToWordsArray64(int* sign_bit, int* words64_count, uint64_t* words);
+
   DECL_CAST(BigInt)
   DECL_VERIFIER(BigInt)
   DECL_PRINTER(BigInt)
@@ -165,15 +177,28 @@ class V8_EXPORT_PRIVATE BigInt : public BigIntBase {
   class BodyDescriptor;
 
  private:
-  friend class BigIntParseIntHelper;
+  friend class StringToBigIntHelper;
+  friend class ValueDeserializer;
+  friend class ValueSerializer;
 
-  // Special functions for BigIntParseIntHelper:
+  // Special functions for StringToBigIntHelper:
   static Handle<BigInt> Zero(Isolate* isolate);
   static MaybeHandle<FreshlyAllocatedBigInt> AllocateFor(
-      Isolate* isolate, int radix, int charcount, ShouldThrow should_throw);
+      Isolate* isolate, int radix, int charcount, ShouldThrow should_throw,
+      PretenureFlag pretenure);
   static void InplaceMultiplyAdd(Handle<FreshlyAllocatedBigInt> x,
                                  uintptr_t factor, uintptr_t summand);
   static Handle<BigInt> Finalize(Handle<FreshlyAllocatedBigInt> x, bool sign);
+
+  // Special functions for ValueSerializer/ValueDeserializer:
+  uint32_t GetBitfieldForSerialization() const;
+  static int DigitsByteLengthForBitfield(uint32_t bitfield);
+  // Expects {storage} to have a length of at least
+  // {DigitsByteLengthForBitfield(GetBitfieldForSerialization())}.
+  void SerializeDigits(uint8_t* storage);
+  V8_WARN_UNUSED_RESULT static MaybeHandle<BigInt> FromSerializedDigits(
+      Isolate* isolate, uint32_t bitfield, Vector<const uint8_t> digits_storage,
+      PretenureFlag pretenure);
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(BigInt);
 };

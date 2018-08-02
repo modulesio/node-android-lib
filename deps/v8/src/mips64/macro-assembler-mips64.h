@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef V8_MIPS_MACRO_ASSEMBLER_MIPS_H_
-#define V8_MIPS_MACRO_ASSEMBLER_MIPS_H_
+#ifndef V8_MIPS64_MACRO_ASSEMBLER_MIPS64_H_
+#define V8_MIPS64_MACRO_ASSEMBLER_MIPS64_H_
 
 #include "src/assembler.h"
 #include "src/globals.h"
@@ -19,12 +19,15 @@ constexpr Register kReturnRegister2 = a0;
 constexpr Register kJSFunctionRegister = a1;
 constexpr Register kContextRegister = s7;
 constexpr Register kAllocateSizeRegister = a0;
+constexpr Register kSpeculationPoisonRegister = a7;
 constexpr Register kInterpreterAccumulatorRegister = v0;
 constexpr Register kInterpreterBytecodeOffsetRegister = t0;
 constexpr Register kInterpreterBytecodeArrayRegister = t1;
 constexpr Register kInterpreterDispatchTableRegister = t2;
 constexpr Register kJavaScriptCallArgCountRegister = a0;
+constexpr Register kJavaScriptCallCodeStartRegister = a2;
 constexpr Register kJavaScriptCallNewTargetRegister = a3;
+constexpr Register kOffHeapTrampolineRegister = at;
 constexpr Register kRuntimeCallFunctionRegister = a1;
 constexpr Register kRuntimeCallArgCountRegister = a0;
 
@@ -195,13 +198,13 @@ class TurboAssembler : public Assembler {
 
   // Calls Abort(msg) if the condition cc is not satisfied.
   // Use --debug_code to enable.
-  void Assert(Condition cc, BailoutReason reason, Register rs, Operand rt);
+  void Assert(Condition cc, AbortReason reason, Register rs, Operand rt);
 
   // Like Assert(), but always enabled.
-  void Check(Condition cc, BailoutReason reason, Register rs, Operand rt);
+  void Check(Condition cc, AbortReason reason, Register rs, Operand rt);
 
   // Print a message to stdout and abort execution.
-  void Abort(BailoutReason msg);
+  void Abort(AbortReason msg);
 
   inline bool AllowThisStubCall(CodeStub* stub);
 
@@ -236,41 +239,30 @@ class TurboAssembler : public Assembler {
 #undef COND_TYPED_ARGS
 #undef COND_ARGS
 
-  // Wrapper functions for the different cmp/branch types.
-  inline void BranchF32(Label* target, Label* nan, Condition cc,
-                        FPURegister cmp1, FPURegister cmp2,
-                        BranchDelaySlot bd = PROTECT) {
-    BranchFCommon(S, target, nan, cc, cmp1, cmp2, bd);
+  // Floating point branches
+  void CompareF32(FPUCondition cc, FPURegister cmp1, FPURegister cmp2) {
+    CompareF(S, cc, cmp1, cmp2);
   }
 
-  inline void BranchF64(Label* target, Label* nan, Condition cc,
-                        FPURegister cmp1, FPURegister cmp2,
-                        BranchDelaySlot bd = PROTECT) {
-    BranchFCommon(D, target, nan, cc, cmp1, cmp2, bd);
+  void CompareIsNanF32(FPURegister cmp1, FPURegister cmp2) {
+    CompareIsNanF(S, cmp1, cmp2);
   }
 
-  // Alternate (inline) version for better readability with USE_DELAY_SLOT.
-  inline void BranchF64(BranchDelaySlot bd, Label* target, Label* nan,
-                        Condition cc, FPURegister cmp1, FPURegister cmp2) {
-    BranchF64(target, nan, cc, cmp1, cmp2, bd);
+  void CompareF64(FPUCondition cc, FPURegister cmp1, FPURegister cmp2) {
+    CompareF(D, cc, cmp1, cmp2);
   }
 
-  inline void BranchF32(BranchDelaySlot bd, Label* target, Label* nan,
-                        Condition cc, FPURegister cmp1, FPURegister cmp2) {
-    BranchF32(target, nan, cc, cmp1, cmp2, bd);
+  void CompareIsNanF64(FPURegister cmp1, FPURegister cmp2) {
+    CompareIsNanF(D, cmp1, cmp2);
   }
 
-  // Alias functions for backward compatibility.
-  inline void BranchF(Label* target, Label* nan, Condition cc, FPURegister cmp1,
-                      FPURegister cmp2, BranchDelaySlot bd = PROTECT) {
-    BranchF64(target, nan, cc, cmp1, cmp2, bd);
-  }
+  void BranchTrueShortF(Label* target);
+  void BranchFalseShortF(Label* target);
 
-  inline void BranchF(BranchDelaySlot bd, Label* target, Label* nan,
-                      Condition cc, FPURegister cmp1, FPURegister cmp2) {
-    BranchF64(bd, target, nan, cc, cmp1, cmp2);
-  }
+  void BranchTrueF(Label* target);
+  void BranchFalseF(Label* target);
 
+  // MSA branches
   void BranchMSA(Label* target, MSABranchDF df, MSABranchCondition cond,
                  MSARegister wt, BranchDelaySlot bd = PROTECT);
 
@@ -492,6 +484,12 @@ class TurboAssembler : public Assembler {
 
   DEFINE_INSTRUCTION(Slt);
   DEFINE_INSTRUCTION(Sltu);
+  DEFINE_INSTRUCTION(Sle);
+  DEFINE_INSTRUCTION(Sleu);
+  DEFINE_INSTRUCTION(Sgt);
+  DEFINE_INSTRUCTION(Sgtu);
+  DEFINE_INSTRUCTION(Sge);
+  DEFINE_INSTRUCTION(Sgeu);
 
   // MIPS32 R2 instruction macro.
   DEFINE_INSTRUCTION(Ror);
@@ -600,7 +598,16 @@ class TurboAssembler : public Assembler {
   void Movt(Register rd, Register rs, uint16_t cc = 0);
   void Movf(Register rd, Register rs, uint16_t cc = 0);
 
+  void LoadZeroIfConditionNotZero(Register dest, Register condition);
+  void LoadZeroIfConditionZero(Register dest, Register condition);
+  void LoadZeroOnCondition(Register rd, Register rs, const Operand& rt,
+                           Condition cond);
+
   void Clz(Register rd, Register rs);
+  void Ctz(Register rd, Register rs);
+  void Dctz(Register rd, Register rs);
+  void Popcnt(Register rd, Register rs);
+  void Dpopcnt(Register rd, Register rs);
 
   // MIPS64 R2 instruction macro.
   void Ext(Register rt, Register rs, uint16_t pos, uint16_t size);
@@ -744,62 +751,22 @@ class TurboAssembler : public Assembler {
     }
   }
 
-  void Move(FPURegister dst, float imm);
-  void Move(FPURegister dst, double imm);
+  void Move(FPURegister dst, float imm) { Move(dst, bit_cast<uint32_t>(imm)); }
+  void Move(FPURegister dst, double imm) { Move(dst, bit_cast<uint64_t>(imm)); }
+  void Move(FPURegister dst, uint32_t src);
+  void Move(FPURegister dst, uint64_t src);
 
-  inline void MulBranchOvf(Register dst, Register left, const Operand& right,
-                           Label* overflow_label, Register scratch = at) {
-    MulBranchOvf(dst, left, right, overflow_label, nullptr, scratch);
-  }
-
-  inline void MulBranchNoOvf(Register dst, Register left, const Operand& right,
-                             Label* no_overflow_label, Register scratch = at) {
-    MulBranchOvf(dst, left, right, nullptr, no_overflow_label, scratch);
-  }
-
-  void MulBranchOvf(Register dst, Register left, const Operand& right,
-                    Label* overflow_label, Label* no_overflow_label,
-                    Register scratch = at);
-
-  void MulBranchOvf(Register dst, Register left, Register right,
-                    Label* overflow_label, Label* no_overflow_label,
-                    Register scratch = at);
-
-  inline void DaddBranchOvf(Register dst, Register left, const Operand& right,
-                            Label* overflow_label, Register scratch = at) {
-    DaddBranchOvf(dst, left, right, overflow_label, nullptr, scratch);
-  }
-
-  inline void DaddBranchNoOvf(Register dst, Register left, const Operand& right,
-                              Label* no_overflow_label, Register scratch = at) {
-    DaddBranchOvf(dst, left, right, nullptr, no_overflow_label, scratch);
-  }
-
-  void DaddBranchOvf(Register dst, Register left, const Operand& right,
-                     Label* overflow_label, Label* no_overflow_label,
-                     Register scratch = at);
-
-  void DaddBranchOvf(Register dst, Register left, Register right,
-                     Label* overflow_label, Label* no_overflow_label,
-                     Register scratch = at);
-
-  inline void DsubBranchOvf(Register dst, Register left, const Operand& right,
-                            Label* overflow_label, Register scratch = at) {
-    DsubBranchOvf(dst, left, right, overflow_label, nullptr, scratch);
-  }
-
-  inline void DsubBranchNoOvf(Register dst, Register left, const Operand& right,
-                              Label* no_overflow_label, Register scratch = at) {
-    DsubBranchOvf(dst, left, right, nullptr, no_overflow_label, scratch);
-  }
-
-  void DsubBranchOvf(Register dst, Register left, const Operand& right,
-                     Label* overflow_label, Label* no_overflow_label,
-                     Register scratch = at);
-
-  void DsubBranchOvf(Register dst, Register left, Register right,
-                     Label* overflow_label, Label* no_overflow_label,
-                     Register scratch = at);
+  // DaddOverflow sets overflow register to a negative value if
+  // overflow occured, otherwise it is zero or positive
+  void DaddOverflow(Register dst, Register left, const Operand& right,
+                    Register overflow);
+  // DsubOverflow sets overflow register to a negative value if
+  // overflow occured, otherwise it is zero or positive
+  void DsubOverflow(Register dst, Register left, const Operand& right,
+                    Register overflow);
+  // MulOverflow sets overflow register to zero if no overflow occured
+  void MulOverflow(Register dst, Register left, const Operand& right,
+                   Register overflow);
 
 // Number of instructions needed for calculation of switch table entry address
 #ifdef _MIPS_ARCH_MIPS64R6
@@ -857,6 +824,18 @@ class TurboAssembler : public Assembler {
   void Trunc_ul_s(FPURegister fd, Register rs, FPURegister scratch,
                   Register result = no_reg);
 
+  // Round double functions
+  void Trunc_d_d(FPURegister fd, FPURegister fs);
+  void Round_d_d(FPURegister fd, FPURegister fs);
+  void Floor_d_d(FPURegister fd, FPURegister fs);
+  void Ceil_d_d(FPURegister fd, FPURegister fs);
+
+  // Round float functions
+  void Trunc_s_s(FPURegister fd, FPURegister fs);
+  void Round_s_s(FPURegister fd, FPURegister fs);
+  void Floor_s_s(FPURegister fd, FPURegister fs);
+  void Ceil_s_s(FPURegister fd, FPURegister fs);
+
   // Jump the register contains a smi.
   void JumpIfSmi(Register value, Label* smi_label, Register scratch = at,
                  BranchDelaySlot bd = PROTECT);
@@ -875,6 +854,12 @@ class TurboAssembler : public Assembler {
   void Dlsa(Register rd, Register rs, Register rt, uint8_t sa,
             Register scratch = at);
 
+  // Compute the start of the generated instruction stream from the current PC.
+  // This is an alternative to embedding the {CodeObject} handle as a reference.
+  void ComputeCodeStartAddress(Register dst);
+
+  void ResetSpeculationPoisonRegister();
+
  protected:
   inline Register GetRtAsRegisterHelper(const Operand& rt, Register scratch);
   inline int32_t GetOffset(int32_t offset, Label* L, OffsetSize bits);
@@ -886,6 +871,12 @@ class TurboAssembler : public Assembler {
   Handle<HeapObject> code_object_;
   bool has_double_zero_reg_set_;
 
+  void CompareF(SecondaryField sizeField, FPUCondition cc, FPURegister cmp1,
+                FPURegister cmp2);
+
+  void CompareIsNanF(SecondaryField sizeField, FPURegister cmp1,
+                     FPURegister cmp2);
+
   void BranchShortMSA(MSABranchDF df, Label* target, MSABranchCondition cond,
                       MSARegister wt, BranchDelaySlot bd = PROTECT);
 
@@ -895,15 +886,6 @@ class TurboAssembler : public Assembler {
   bool CalculateOffset(Label* L, int32_t& offset, OffsetSize bits);
   bool CalculateOffset(Label* L, int32_t& offset, OffsetSize bits,
                        Register& scratch, const Operand& rt);
-
-  // Common implementation of BranchF functions for the different formats.
-  void BranchFCommon(SecondaryField sizeField, Label* target, Label* nan,
-                     Condition cc, FPURegister cmp1, FPURegister cmp2,
-                     BranchDelaySlot bd = PROTECT);
-
-  void BranchShortF(SecondaryField sizeField, Label* target, Condition cc,
-                    FPURegister cmp1, FPURegister cmp2,
-                    BranchDelaySlot bd = PROTECT);
 
   void BranchShortHelperR6(int32_t offset, Label* L);
   void BranchShortHelper(int16_t offset, Label* L, BranchDelaySlot bdslot);
@@ -929,6 +911,14 @@ class TurboAssembler : public Assembler {
                                BranchDelaySlot bdslot);
   void BranchLong(Label* L, BranchDelaySlot bdslot);
   void BranchAndLinkLong(Label* L, BranchDelaySlot bdslot);
+
+  template <typename RoundFunc>
+  void RoundDouble(FPURegister dst, FPURegister src, FPURoundingMode mode,
+                   RoundFunc round);
+
+  template <typename RoundFunc>
+  void RoundFloat(FPURegister dst, FPURegister src, FPURoundingMode mode,
+                  RoundFunc round);
 
   // Push a fixed frame, consisting of ra, fp.
   void PushCommonFrame(Register marker_reg = no_reg);
@@ -1091,10 +1081,6 @@ class MacroAssembler : public TurboAssembler {
   void InvokeFunction(Register function, const ParameterCount& expected,
                       const ParameterCount& actual, InvokeFlag flag);
 
-  void InvokeFunction(Handle<JSFunction> function,
-                      const ParameterCount& expected,
-                      const ParameterCount& actual, InvokeFlag flag);
-
   // Frame restart support.
   void MaybeDropFrames();
 
@@ -1155,6 +1141,13 @@ const Operand& rt = Operand(zero_reg), BranchDelaySlot bd = PROTECT
   void JumpToExternalReference(const ExternalReference& builtin,
                                BranchDelaySlot bd = PROTECT,
                                bool builtin_exit_frame = false);
+
+  // Generates a trampoline to jump to the off-heap instruction stream.
+  void JumpToInstructionStream(Address entry);
+
+  // ---------------------------------------------------------------------------
+  // In-place weak references.
+  void LoadWeakValue(Register out, Register in, Label* target_if_cleared);
 
   // -------------------------------------------------------------------------
   // StatsCounter support.
@@ -1218,6 +1211,9 @@ const Operand& rt = Operand(zero_reg), BranchDelaySlot bd = PROTECT
 
   // Abort execution if argument is not a FixedArray, enabled via --debug-code.
   void AssertFixedArray(Register object);
+
+  // Abort execution if argument is not a Constructor, enabled via --debug-code.
+  void AssertConstructor(Register object);
 
   // Abort execution if argument is not a JSFunction, enabled via --debug-code.
   void AssertFunction(Register object);
@@ -1301,4 +1297,4 @@ void TurboAssembler::GenerateSwitchTable(Register index, size_t case_count,
 }  // namespace internal
 }  // namespace v8
 
-#endif  // V8_MIPS_MACRO_ASSEMBLER_MIPS_H_
+#endif  // V8_MIPS64_MACRO_ASSEMBLER_MIPS64_H_

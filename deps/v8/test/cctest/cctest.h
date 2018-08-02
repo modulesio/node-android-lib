@@ -34,8 +34,8 @@
 #include "include/v8-platform.h"
 #include "src/assembler.h"
 #include "src/debug/debug-interface.h"
-#include "src/factory.h"
 #include "src/flags.h"
+#include "src/heap/factory.h"
 #include "src/isolate.h"
 #include "src/objects.h"
 #include "src/utils.h"
@@ -454,25 +454,6 @@ static inline v8::Local<v8::Value> CompileRun(
 }
 
 
-static inline v8::Local<v8::Value> ParserCacheCompileRun(const char* source) {
-  // Compile once just to get the preparse data, then compile the second time
-  // using the data.
-  v8::Isolate* isolate = v8::Isolate::GetCurrent();
-  v8::Local<v8::Context> context = isolate->GetCurrentContext();
-  v8::ScriptCompiler::Source script_source(v8_str(source));
-  v8::ScriptCompiler::Compile(context, &script_source,
-                              v8::ScriptCompiler::kProduceParserCache)
-      .ToLocalChecked();
-
-  // Check whether we received cached data, and if so use it.
-  v8::ScriptCompiler::CompileOptions options =
-      script_source.GetCachedData() ? v8::ScriptCompiler::kConsumeParserCache
-                                    : v8::ScriptCompiler::kNoCompileOptions;
-
-  return CompileRun(context, &script_source, options);
-}
-
-
 // Helper functions that compile and run the source with given origin.
 static inline v8::Local<v8::Value> CompileRunWithOrigin(const char* source,
                                                         const char* origin_url,
@@ -571,14 +552,27 @@ static inline void CheckDoubleEquals(double expected, double actual) {
 static inline uint8_t* AllocateAssemblerBuffer(
     size_t* allocated,
     size_t requested = v8::internal::AssemblerBase::kMinimalBufferSize) {
-  size_t page_size = v8::base::OS::AllocatePageSize();
+  size_t page_size = v8::internal::AllocatePageSize();
   size_t alloc_size = RoundUp(requested, page_size);
-  void* result =
-      v8::base::OS::Allocate(nullptr, alloc_size, page_size,
-                             v8::base::OS::MemoryPermission::kReadWriteExecute);
+  void* result = v8::internal::AllocatePages(
+      nullptr, alloc_size, page_size, v8::PageAllocator::kReadWriteExecute);
   CHECK(result);
   *allocated = alloc_size;
   return static_cast<uint8_t*>(result);
+}
+
+static inline void MakeAssemblerBufferExecutable(uint8_t* buffer,
+                                                 size_t allocated) {
+  bool result = v8::internal::SetPermissions(buffer, allocated,
+                                             v8::PageAllocator::kReadExecute);
+  CHECK(result);
+}
+
+static inline void MakeAssemblerBufferWritable(uint8_t* buffer,
+                                               size_t allocated) {
+  bool result = v8::internal::SetPermissions(buffer, allocated,
+                                             v8::PageAllocator::kReadWrite);
+  CHECK(result);
 }
 
 static v8::debug::DebugDelegate dummy_delegate;
@@ -674,8 +668,16 @@ class ManualGCScope {
 class TestPlatform : public v8::Platform {
  public:
   // v8::Platform implementation.
+  v8::PageAllocator* GetPageAllocator() override {
+    return old_platform_->GetPageAllocator();
+  }
+
   void OnCriticalMemoryPressure() override {
     old_platform_->OnCriticalMemoryPressure();
+  }
+
+  bool OnCriticalMemoryPressure(size_t length) override {
+    return old_platform_->OnCriticalMemoryPressure(length);
   }
 
   std::shared_ptr<v8::TaskRunner> GetForegroundTaskRunner(
@@ -683,14 +685,13 @@ class TestPlatform : public v8::Platform {
     return old_platform_->GetForegroundTaskRunner(isolate);
   }
 
-  std::shared_ptr<v8::TaskRunner> GetBackgroundTaskRunner(
+  std::shared_ptr<v8::TaskRunner> GetWorkerThreadsTaskRunner(
       v8::Isolate* isolate) override {
-    return old_platform_->GetBackgroundTaskRunner(isolate);
+    return old_platform_->GetWorkerThreadsTaskRunner(isolate);
   }
 
-  void CallOnBackgroundThread(v8::Task* task,
-                              ExpectedRuntime expected_runtime) override {
-    old_platform_->CallOnBackgroundThread(task, expected_runtime);
+  void CallOnWorkerThread(std::unique_ptr<v8::Task> task) override {
+    old_platform_->CallOnWorkerThread(std::move(task));
   }
 
   void CallOnForegroundThread(v8::Isolate* isolate, v8::Task* task) override {

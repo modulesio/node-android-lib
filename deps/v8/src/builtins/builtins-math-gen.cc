@@ -8,7 +8,6 @@
 #include "src/builtins/builtins.h"
 #include "src/code-factory.h"
 #include "src/code-stub-assembler.h"
-#include "src/zone/zone-list-inl.h"  // TODO(mstarzinger): Temporary cycle breaker.
 
 namespace v8 {
 namespace internal {
@@ -162,7 +161,7 @@ void MathBuiltinsAssembler::MathMaxMin(
                                                     SloppyTNode<Float64T>),
     double default_val) {
   CodeStubArguments arguments(this, ChangeInt32ToIntPtr(argc));
-  argc = arguments.GetLength();
+  argc = arguments.GetLength(INTPTR_PARAMETERS);
 
   VARIABLE(result, MachineRepresentation::kFloat64);
   result.Bind(Float64Constant(default_val));
@@ -269,7 +268,7 @@ TF_BUILTIN(MathClz32, CodeStubAssembler) {
 
     BIND(&if_xissmi);
     {
-      var_clz32_x.Bind(SmiToWord32(x));
+      var_clz32_x.Bind(SmiToInt32(x));
       Goto(&do_clz32);
     }
 

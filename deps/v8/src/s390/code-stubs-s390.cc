@@ -122,8 +122,8 @@ void DoubleToIStub::Generate(MacroAssembler* masm) {
   // scratch_high LSR 31 equals zero.
   // New result = (result eor 0) + 0 = result.
   // If the input was negative, we have to negate the result.
-  // Input_high ASR 31 equals 0xffffffff and scratch_high LSR 31 equals 1.
-  // New result = (result eor 0xffffffff) + 1 = 0 - result.
+  // Input_high ASR 31 equals 0xFFFFFFFF and scratch_high LSR 31 equals 1.
+  // New result = (result eor 0xFFFFFFFF) + 1 = 0 - result.
   __ ShiftRightArith(r0, scratch_high, Operand(31));
 #if V8_TARGET_ARCH_S390X
   __ lgfr(r0, r0);
@@ -153,43 +153,30 @@ void MathPowStub::Generate(MacroAssembler* masm) {
   const Register scratch2 = r9;
 
   Label call_runtime, done, int_exponent;
-  if (exponent_type() == TAGGED) {
-    // Base is already in double_base.
-    __ UntagAndJumpIfSmi(scratch, exponent, &int_exponent);
 
-    __ LoadDouble(double_exponent,
-                  FieldMemOperand(exponent, HeapNumber::kValueOffset));
+  // Detect integer exponents stored as double.
+  __ TryDoubleToInt32Exact(scratch, double_exponent, scratch2, double_scratch);
+  __ beq(&int_exponent, Label::kNear);
+
+  __ push(r14);
+  {
+    AllowExternalCallThatCantCauseGC scope(masm);
+    __ PrepareCallCFunction(0, 2, scratch);
+    __ MovToFloatParameters(double_base, double_exponent);
+    __ CallCFunction(ExternalReference::power_double_double_function(isolate()),
+                     0, 2);
   }
-
-  if (exponent_type() != INTEGER) {
-    // Detect integer exponents stored as double.
-    __ TryDoubleToInt32Exact(scratch, double_exponent, scratch2,
-                             double_scratch);
-    __ beq(&int_exponent, Label::kNear);
-
-    __ push(r14);
-    {
-      AllowExternalCallThatCantCauseGC scope(masm);
-      __ PrepareCallCFunction(0, 2, scratch);
-      __ MovToFloatParameters(double_base, double_exponent);
-      __ CallCFunction(
-          ExternalReference::power_double_double_function(isolate()), 0, 2);
-    }
-    __ pop(r14);
-    __ MovFromFloatResult(double_result);
-    __ b(&done);
-  }
+  __ pop(r14);
+  __ MovFromFloatResult(double_result);
+  __ b(&done);
 
   // Calculate power with integer exponent.
   __ bind(&int_exponent);
 
   // Get two copies of exponent in the registers scratch and exponent.
-  if (exponent_type() == INTEGER) {
-    __ LoadRR(scratch, exponent);
-  } else {
-    // Exponent has previously been stored into scratch as untagged integer.
-    __ LoadRR(exponent, scratch);
-  }
+  // Exponent has previously been stored into scratch as untagged integer.
+  __ LoadRR(exponent, scratch);
+
   __ ldr(double_scratch, double_base);  // Back up base.
   __ LoadImmP(scratch2, Operand(1));
   __ ConvertIntToDouble(double_result, scratch2);
@@ -435,6 +422,11 @@ void CEntryStub::Generate(MacroAssembler* masm) {
   __ StoreP(cp, MemOperand(fp, StandardFrameConstants::kContextOffset));
   __ bind(&skip);
 
+  // Reset the masking register.
+  if (FLAG_branch_load_poisoning) {
+    __ ResetSpeculationPoisonRegister();
+  }
+
   // Compute the handler entry address and jump to it.
   __ mov(r3, Operand(pending_handler_entrypoint_address));
   __ LoadP(r3, MemOperand(r3));
@@ -495,6 +487,7 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
   //   kCEntryFPAddress
   //   Frame type
   __ lay(sp, MemOperand(sp, -5 * kPointerSize));
+
   // Push a bad frame pointer to fail if it is used.
   __ LoadImmP(r10, Operand(-1));
 
@@ -511,6 +504,8 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
   // frame already for the frame type being pushed later.
   __ lay(fp,
          MemOperand(sp, -EntryFrameConstants::kCallerFPOffset + kPointerSize));
+
+  __ InitializeRootRegister();
 
   // If this is the outermost JS call, set js_entry_sp value.
   Label non_outermost_js;
@@ -564,12 +559,7 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
   // r4: receiver
   // r5: argc
   // r6: argv
-  if (type() == StackFrame::CONSTRUCT_ENTRY) {
-    __ Call(BUILTIN_CODE(isolate(), JSConstructEntryTrampoline),
-            RelocInfo::CODE_TARGET);
-  } else {
-    __ Call(BUILTIN_CODE(isolate(), JSEntryTrampoline), RelocInfo::CODE_TARGET);
-  }
+  __ Call(EntryTrampoline(), RelocInfo::CODE_TARGET);
 
   // Unlink this frame from the handler chain.
   __ PopStackHandler();
@@ -783,7 +773,7 @@ static void CreateArrayDispatch(MacroAssembler* masm,
     }
 
     // If we reached this point there is a problem.
-    __ Abort(kUnexpectedElementsKindInArrayConstructor);
+    __ Abort(AbortReason::kUnexpectedElementsKindInArrayConstructor);
   } else {
     UNREACHABLE();
   }
@@ -822,7 +812,7 @@ static void CreateArrayDispatchOneArgument(MacroAssembler* masm,
     if (FLAG_debug_code) {
       __ LoadP(r7, FieldMemOperand(r4, 0));
       __ CompareRoot(r7, Heap::kAllocationSiteMapRootIndex);
-      __ Assert(eq, kExpectedAllocationSite);
+      __ Assert(eq, AbortReason::kExpectedAllocationSite);
     }
 
     // Save the resulting elements kind in type info. We can't just store r5
@@ -846,7 +836,7 @@ static void CreateArrayDispatchOneArgument(MacroAssembler* masm,
     }
 
     // If we reached this point there is a problem.
-    __ Abort(kUnexpectedElementsKindInArrayConstructor);
+    __ Abort(AbortReason::kUnexpectedElementsKindInArrayConstructor);
   } else {
     UNREACHABLE();
   }
@@ -917,9 +907,9 @@ void ArrayConstructorStub::Generate(MacroAssembler* masm) {
     __ LoadP(r6, FieldMemOperand(r3, JSFunction::kPrototypeOrInitialMapOffset));
     // Will both indicate a nullptr and a Smi.
     __ TestIfSmi(r6);
-    __ Assert(ne, kUnexpectedInitialMapForArrayFunction, cr0);
+    __ Assert(ne, AbortReason::kUnexpectedInitialMapForArrayFunction, cr0);
     __ CompareObjectType(r6, r6, r7, MAP_TYPE);
-    __ Assert(eq, kUnexpectedInitialMapForArrayFunction);
+    __ Assert(eq, AbortReason::kUnexpectedInitialMapForArrayFunction);
 
     // We should either have undefined in r4 or a valid AllocationSite
     __ AssertUndefinedOrAllocationSite(r4, r6);
@@ -996,9 +986,9 @@ void InternalArrayConstructorStub::Generate(MacroAssembler* masm) {
     __ LoadP(r5, FieldMemOperand(r3, JSFunction::kPrototypeOrInitialMapOffset));
     // Will both indicate a nullptr and a Smi.
     __ TestIfSmi(r5);
-    __ Assert(ne, kUnexpectedInitialMapForArrayFunction, cr0);
+    __ Assert(ne, AbortReason::kUnexpectedInitialMapForArrayFunction, cr0);
     __ CompareObjectType(r5, r5, r6, MAP_TYPE);
-    __ Assert(eq, kUnexpectedInitialMapForArrayFunction);
+    __ Assert(eq, AbortReason::kUnexpectedInitialMapForArrayFunction);
   }
 
   // Figure out the right elements kind
@@ -1013,7 +1003,9 @@ void InternalArrayConstructorStub::Generate(MacroAssembler* masm) {
     __ CmpP(r5, Operand(PACKED_ELEMENTS));
     __ beq(&done);
     __ CmpP(r5, Operand(HOLEY_ELEMENTS));
-    __ Assert(eq, kInvalidElementsKindForInternalArrayOrInternalPackedArray);
+    __ Assert(
+        eq,
+        AbortReason::kInvalidElementsKindForInternalArrayOrInternalPackedArray);
     __ bind(&done);
   }
 
@@ -1118,7 +1110,7 @@ static void CallApiFunctionAndReturn(MacroAssembler* masm,
   if (__ emit_debug_code()) {
     __ LoadlW(r3, MemOperand(r9, kLevelOffset));
     __ CmpP(r3, r8);
-    __ Check(eq, kUnexpectedLevelAfterReturnFromApiCall);
+    __ Check(eq, AbortReason::kUnexpectedLevelAfterReturnFromApiCall);
   }
   __ SubP(r8, Operand(1));
   __ StoreW(r8, MemOperand(r9, kLevelOffset));

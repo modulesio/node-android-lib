@@ -16,6 +16,9 @@
 
 namespace v8 {
 namespace internal {
+
+class VectorSlotPair;
+
 namespace compiler {
 
 class Reduction;
@@ -32,7 +35,7 @@ class BytecodeGraphBuilder {
       SourcePositionTable* source_positions, Handle<Context> native_context,
       int inlining_id = SourcePosition::kNotInlined,
       JSTypeHintLowering::Flags flags = JSTypeHintLowering::kNoFlags,
-      bool stack_check = true);
+      bool stack_check = true, bool analyze_environment_liveness = true);
 
   // Creates a graph by visiting bytecodes.
   void CreateGraph();
@@ -97,8 +100,9 @@ class BytecodeGraphBuilder {
   Node* NewIfDefault() { return NewNode(common()->IfDefault()); }
   Node* NewMerge() { return NewNode(common()->Merge(1), true); }
   Node* NewLoop() { return NewNode(common()->Loop(1), true); }
-  Node* NewBranch(Node* condition, BranchHint hint = BranchHint::kNone) {
-    return NewNode(common()->Branch(hint), condition);
+  Node* NewBranch(Node* condition, BranchHint hint = BranchHint::kNone,
+                  IsSafetyCheck is_safety_check = IsSafetyCheck::kSafetyCheck) {
+    return NewNode(common()->Branch(hint, is_safety_check), condition);
   }
   Node* NewSwitch(Node* condition, int control_output_count) {
     return NewNode(common()->Switch(control_output_count), condition);
@@ -152,7 +156,6 @@ class BytecodeGraphBuilder {
   void BuildCreateArguments(CreateArgumentsType type);
   Node* BuildLoadGlobal(Handle<Name> name, uint32_t feedback_slot_index,
                         TypeofMode typeof_mode);
-  void BuildStoreGlobal(LanguageMode language_mode);
 
   enum class StoreMode {
     // Check the prototype chain before storing.
@@ -232,6 +235,10 @@ class BytecodeGraphBuilder {
   // feedback.
   CallFrequency ComputeCallFrequency(int slot_id) const;
 
+  // Helper function to extract the speculation mode from the recorded type
+  // feedback.
+  SpeculationMode GetSpeculationMode(int slot_id) const;
+
   // Control flow plumbing.
   void BuildJump();
   void BuildJumpIf(Node* condition);
@@ -246,6 +253,9 @@ class BytecodeGraphBuilder {
   void BuildJumpIfJSReceiver();
 
   void BuildSwitchOnSmi(Node* condition);
+  void BuildSwitchOnGeneratorState(
+      const ZoneVector<ResumeJumpTarget>& resume_jump_targets,
+      bool allow_fallthrough_on_executing);
 
   // Simulates control flow by forward-propagating environments.
   void MergeIntoSuccessorEnvironment(int target_offset);
@@ -261,6 +271,9 @@ class BytecodeGraphBuilder {
   void BuildLoopExitsForFunctionExit(const BytecodeLivenessState* liveness);
   void BuildLoopExitsUntilLoop(int loop_offset,
                                const BytecodeLivenessState* liveness);
+
+  // Helper for building a return (from an actual return or a suspend).
+  void BuildReturn(const BytecodeLivenessState* liveness);
 
   // Simulates entry and exit of exception handlers.
   void ExitThenEnterExceptionHandlers(int current_offset);
@@ -296,9 +309,6 @@ class BytecodeGraphBuilder {
   Zone* local_zone() const { return local_zone_; }
   const Handle<BytecodeArray>& bytecode_array() const {
     return bytecode_array_;
-  }
-  const Handle<HandlerTable>& exception_handler_table() const {
-    return exception_handler_table_;
   }
   const Handle<FeedbackVector>& feedback_vector() const {
     return feedback_vector_;
@@ -339,6 +349,10 @@ class BytecodeGraphBuilder {
 
   void set_stack_check(bool stack_check) { stack_check_ = stack_check; }
 
+  bool analyze_environment_liveness() const {
+    return analyze_environment_liveness_;
+  }
+
   int current_exception_handler() { return current_exception_handler_; }
 
   void set_current_exception_handler(int index) {
@@ -360,7 +374,6 @@ class BytecodeGraphBuilder {
   JSGraph* jsgraph_;
   CallFrequency const invocation_frequency_;
   Handle<BytecodeArray> bytecode_array_;
-  Handle<HandlerTable> exception_handler_table_;
   Handle<FeedbackVector> feedback_vector_;
   const JSTypeHintLowering type_hint_lowering_;
   const FrameStateFunctionInfo* frame_state_function_info_;
@@ -370,11 +383,21 @@ class BytecodeGraphBuilder {
   BailoutId osr_offset_;
   int currently_peeled_loop_offset_;
   bool stack_check_;
+  bool analyze_environment_liveness_;
 
   // Merge environments are snapshots of the environment at points where the
   // control flow merges. This models a forward data flow propagation of all
-  // values from all predecessors of the merge in question.
+  // values from all predecessors of the merge in question. They are indexed by
+  // the bytecode offset
   ZoneMap<int, Environment*> merge_environments_;
+
+  // Generator merge environments are snapshots of the current resume
+  // environment, tracing back through loop headers to the resume switch of a
+  // generator. They allow us to model a single resume jump as several switch
+  // statements across loop headers, keeping those loop headers reducible,
+  // without having to merge the "executing" environments of the generator into
+  // the "resuming" ones. They are indexed by the suspend id of the resume.
+  ZoneMap<int, Environment*> generator_merge_environments_;
 
   // Exception handlers currently entered by the iteration.
   ZoneStack<ExceptionHandler> exception_handlers_;

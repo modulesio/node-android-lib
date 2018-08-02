@@ -4,6 +4,7 @@
 #include "node.h"
 #include "v8.h"
 
+#include <algorithm>
 #include <map>
 #include <string>
 
@@ -23,15 +24,8 @@ extern uint64_t performance_v8_start;
   V(V8_START, "v8Start")                                                      \
   V(LOOP_START, "loopStart")                                                  \
   V(LOOP_EXIT, "loopExit")                                                    \
-  V(BOOTSTRAP_COMPLETE, "bootstrapComplete")                                  \
-  V(THIRD_PARTY_MAIN_START, "thirdPartyMainStart")                            \
-  V(THIRD_PARTY_MAIN_END, "thirdPartyMainEnd")                                \
-  V(CLUSTER_SETUP_START, "clusterSetupStart")                                 \
-  V(CLUSTER_SETUP_END, "clusterSetupEnd")                                     \
-  V(MODULE_LOAD_START, "moduleLoadStart")                                     \
-  V(MODULE_LOAD_END, "moduleLoadEnd")                                         \
-  V(PRELOAD_MODULE_LOAD_START, "preloadModulesLoadStart")                     \
-  V(PRELOAD_MODULE_LOAD_END, "preloadModulesLoadEnd")
+  V(BOOTSTRAP_COMPLETE, "bootstrapComplete")
+
 
 #define NODE_PERFORMANCE_ENTRY_TYPES(V)                                       \
   V(NODE, "node")                                                             \
@@ -55,12 +49,6 @@ enum PerformanceEntryType {
   NODE_PERFORMANCE_ENTRY_TYPE_INVALID
 };
 
-#define PERFORMANCE_MARK(env, n)                                              \
-  do {                                                                        \
-    node::performance::MarkPerformanceMilestone(env,                          \
-                         node::performance::NODE_PERFORMANCE_MILESTONE_##n);  \
-  } while (0);
-
 class performance_state {
  public:
   explicit performance_state(v8::Isolate* isolate) :
@@ -76,11 +64,17 @@ class performance_state {
       isolate,
       offsetof(performance_state_internal, observers),
       NODE_PERFORMANCE_ENTRY_TYPE_INVALID,
-      root) {}
+      root) {
+    for (size_t i = 0; i < milestones.Length(); i++)
+      milestones[i] = -1.;
+  }
 
   AliasedBuffer<uint8_t, v8::Uint8Array> root;
   AliasedBuffer<double, v8::Float64Array> milestones;
   AliasedBuffer<uint32_t, v8::Uint32Array> observers;
+
+  void Mark(enum PerformanceMilestone milestone,
+            uint64_t ts = PERFORMANCE_NOW());
 
  private:
   struct performance_state_internal {

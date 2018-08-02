@@ -33,8 +33,8 @@ assert.notStrictEqual(test_general.testGetPrototype(baseObject),
                       test_general.testGetPrototype(extendedObject));
 
 // test version management functions
-// expected version is currently 1
-assert.strictEqual(test_general.testGetVersion(), 2);
+// expected version is currently 3
+assert.strictEqual(test_general.testGetVersion(), 3);
 
 const [ major, minor, patch, release ] = test_general.testGetNodeVersion();
 assert.strictEqual(process.version.split('-')[0],
@@ -63,22 +63,25 @@ let w = {};
 test_general.wrap(w);
 w = null;
 global.gc();
-assert.strictEqual(test_general.derefItemWasCalled(), true,
+const derefItemWasCalled = test_general.derefItemWasCalled();
+assert.strictEqual(derefItemWasCalled, true,
                    'deref_item() was called upon garbage collecting a ' +
-                   'wrapped object');
+                   'wrapped object. test_general.derefItemWasCalled() ' +
+                   `returned ${derefItemWasCalled}`);
+
 
 // Assert that wrapping twice fails.
 const x = {};
 test_general.wrap(x);
-assert.throws(() => test_general.wrap(x), Error);
+common.expectsError(() => test_general.wrap(x),
+                    { type: Error, message: 'Invalid argument' });
 
 // Ensure that wrapping, removing the wrap, and then wrapping again works.
 const y = {};
 test_general.wrap(y);
 test_general.removeWrap(y);
-assert.doesNotThrow(() => test_general.wrap(y), Error,
-                    'Wrapping twice succeeds if a remove_wrap()' +
-                    ' separates the instances');
+// Wrapping twice succeeds if a remove_wrap() separates the instances
+test_general.wrap(y);
 
 // Ensure that removing a wrap and garbage collecting does not fire the
 // finalize callback.
@@ -87,8 +90,11 @@ test_general.testFinalizeWrap(z);
 test_general.removeWrap(z);
 z = null;
 global.gc();
-assert.strictEqual(test_general.finalizeWasCalled(), false,
-                   'finalize callback was not called upon garbage collection');
+const finalizeWasCalled = test_general.finalizeWasCalled();
+assert.strictEqual(finalizeWasCalled, false,
+                   'finalize callback was not called upon garbage collection.' +
+                   ' test_general.finalizeWasCalled() ' +
+                   `returned ${finalizeWasCalled}`);
 
 // test napi_adjust_external_memory
 const adjustedValue = test_general.testAdjustExternalMemory();

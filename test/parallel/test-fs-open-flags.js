@@ -39,7 +39,7 @@ const O_DSYNC = fs.constants.O_DSYNC || 0;
 const O_TRUNC = fs.constants.O_TRUNC || 0;
 const O_WRONLY = fs.constants.O_WRONLY || 0;
 
-const { stringToFlags } = require('internal/fs');
+const { stringToFlags } = require('internal/fs/utils');
 
 assert.strictEqual(stringToFlags('r'), O_RDONLY);
 assert.strictEqual(stringToFlags('r+'), O_RDWR);
@@ -56,8 +56,12 @@ assert.strictEqual(stringToFlags('wx+'), O_TRUNC | O_CREAT | O_RDWR | O_EXCL);
 assert.strictEqual(stringToFlags('xw+'), O_TRUNC | O_CREAT | O_RDWR | O_EXCL);
 assert.strictEqual(stringToFlags('ax'), O_APPEND | O_CREAT | O_WRONLY | O_EXCL);
 assert.strictEqual(stringToFlags('xa'), O_APPEND | O_CREAT | O_WRONLY | O_EXCL);
+assert.strictEqual(stringToFlags('as'), O_APPEND | O_CREAT | O_WRONLY | O_SYNC);
+assert.strictEqual(stringToFlags('sa'), O_APPEND | O_CREAT | O_WRONLY | O_SYNC);
 assert.strictEqual(stringToFlags('ax+'), O_APPEND | O_CREAT | O_RDWR | O_EXCL);
 assert.strictEqual(stringToFlags('xa+'), O_APPEND | O_CREAT | O_RDWR | O_EXCL);
+assert.strictEqual(stringToFlags('as+'), O_APPEND | O_CREAT | O_RDWR | O_SYNC);
+assert.strictEqual(stringToFlags('sa+'), O_APPEND | O_CREAT | O_RDWR | O_SYNC);
 
 ('+ +a +r +w rw wa war raw r++ a++ w++ x +x x+ rx rx+ wxx wax xwx xxx')
   .split(' ')
@@ -84,8 +88,9 @@ common.expectsError(
 );
 
 if (common.isLinux || common.isOSX) {
-  common.refreshTmpDir();
-  const file = path.join(common.tmpDir, 'a.js');
+  const tmpdir = require('../common/tmpdir');
+  tmpdir.refresh();
+  const file = path.join(tmpdir.path, 'a.js');
   fs.copyFileSync(fixtures.path('a.js'), file);
   fs.open(file, O_DSYNC, common.mustCall(assert.ifError));
 }

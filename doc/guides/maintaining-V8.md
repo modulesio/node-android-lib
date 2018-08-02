@@ -3,15 +3,14 @@
 ## Background
 
 V8 follows the Chromium release schedule. The support horizon for Chromium is
-very different from the support horizon that Node.js needs to provide to its
-users. As a result Node.js needs to support a version of V8 for quite a bit
-longer than what upstream needs to support. Since V8 doesn't have an LTS
-supported branch, there is no official process around how the V8 branches in
-Node.js are maintained.
+different compared to the support horizon for Node.js. As a result, Node.js
+needs to support multiple versions of V8 longer than what upstream needs
+to support. V8 branches in Node.js lack of an official maintenance process due
+to a missing LTS supported branch.
 
-This document attempts to document the current processes and proposes a workflow
-for maintaining the V8 branches in Node.js LTS and Current releases and how the
-Node.js and V8 teams at Google can help.
+This document attempts to outline the current maintenance processes, proposes
+a workflow for maintaining the V8 branches in both Node.js LTS and current
+releases, and discusses how the Node.js and V8 teams at Google can help.
 
 ## V8 Release Schedule
 
@@ -243,13 +242,13 @@ V8 5.1 (since it was already abandoned). Since Node.js `v6.x` uses V8 5.1, the
 fix needed to be cherry-picked. To cherry-pick, here's an example workflow:
 
 * Download and apply the commit linked-to in the issue (in this case a51f429).
-  `curl -L https://github.com/v8/v8/commit/a51f429.patch | git am -3 --directory=deps/v8`.
-  If the branches have diverged significantly, this may not apply cleanly. It
-  may help to try to cherry-pick the merge to the oldest branch that was done
-  upstream in V8. In this example, this would be the patch from the merge to
-  5.2. The hope is that this would be closer to the V8 5.1, and has a better
-  chance of applying cleanly. If you're stuck, feel free to ping @ofrobots for
-  help.
+  `curl -L https://github.com/v8/v8/commit/a51f429.patch | git am -3
+  --directory=deps/v8`. If the branches have diverged significantly, this may
+  not apply cleanly. It may help to try to cherry-pick the merge to the oldest
+  branch that was done upstream in V8. In this example, this would be the patch
+  from the merge to 5.2. The hope is that this would be closer to the V8 5.1,
+  and has a better chance of applying cleanly. If you're stuck, feel free to
+  ping @ofrobots for help.
 * Modify the commit message to match the format we use for V8 backports and
   replace yourself as the author. `git commit --amend --reset-author`. You may
   want to add extra description if necessary to indicate the impact of the fix

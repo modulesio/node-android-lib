@@ -174,31 +174,16 @@ bool Scanner::BookmarkScope::HasBeenApplied() {
   return bookmark_ == kBookmarkWasApplied;
 }
 
-// LineTerminator:       'JS_Line_Terminator' in point.properties
-// ES#sec-line-terminators lists exactly 4 code points:
-// LF (U+000A), CR (U+000D), LS(U+2028), PS(U+2029)
-bool Scanner::IsLineTerminator(uc32 c) {
-  if (c == 0x000A || c == 0x000D) {
-    return true;
-  }
-  if (c == 0x2028 || c == 0x2029) {
-    ++use_counts_[v8::Isolate::UseCounterFeature::
-                      kLineOrParagraphSeparatorAsLineTerminator];
-    return true;
-  }
-  return false;
-}
-
 // ----------------------------------------------------------------------------
 // Scanner
 
-Scanner::Scanner(UnicodeCache* unicode_cache, int* use_counts)
+Scanner::Scanner(UnicodeCache* unicode_cache)
     : unicode_cache_(unicode_cache),
       octal_pos_(Location::invalid()),
       octal_message_(MessageTemplate::kNone),
       found_html_comment_(false),
       allow_harmony_bigint_(false),
-      use_counts_(use_counts) {}
+      allow_harmony_numeric_separator_(false) {}
 
 void Scanner::Initialize(Utf16CharacterStream* source, bool is_module) {
   DCHECK_NOT_NULL(source);
@@ -257,7 +242,8 @@ uc32 Scanner::ScanUnlimitedLengthHexNumber(int max_value, int beg_pos) {
 // Ensure that tokens can be stored in a byte.
 STATIC_ASSERT(Token::NUM_TOKENS <= 0x100);
 
-// Table of one-character tokens, by character (0x00..0x7f only).
+// Table of one-character tokens, by character (0x00..0x7F only).
+// clang-format off
 static const byte one_char_tokens[] = {
   Token::ILLEGAL,
   Token::ILLEGAL,
@@ -303,7 +289,7 @@ static const byte one_char_tokens[] = {
   Token::RPAREN,       // 0x29
   Token::ILLEGAL,
   Token::ILLEGAL,
-  Token::COMMA,        // 0x2c
+  Token::COMMA,        // 0x2C
   Token::ILLEGAL,
   Token::ILLEGAL,
   Token::ILLEGAL,
@@ -317,12 +303,12 @@ static const byte one_char_tokens[] = {
   Token::ILLEGAL,
   Token::ILLEGAL,
   Token::ILLEGAL,
-  Token::COLON,        // 0x3a
-  Token::SEMICOLON,    // 0x3b
+  Token::COLON,        // 0x3A
+  Token::SEMICOLON,    // 0x3B
   Token::ILLEGAL,
   Token::ILLEGAL,
   Token::ILLEGAL,
-  Token::CONDITIONAL,  // 0x3f
+  Token::CONDITIONAL,  // 0x3F
   Token::ILLEGAL,
   Token::ILLEGAL,
   Token::ILLEGAL,
@@ -350,9 +336,9 @@ static const byte one_char_tokens[] = {
   Token::ILLEGAL,
   Token::ILLEGAL,
   Token::ILLEGAL,
-  Token::LBRACK,     // 0x5b
+  Token::LBRACK,     // 0x5B
   Token::ILLEGAL,
-  Token::RBRACK,     // 0x5d
+  Token::RBRACK,     // 0x5D
   Token::ILLEGAL,
   Token::ILLEGAL,
   Token::ILLEGAL,
@@ -382,13 +368,13 @@ static const byte one_char_tokens[] = {
   Token::ILLEGAL,
   Token::ILLEGAL,
   Token::ILLEGAL,
-  Token::LBRACE,       // 0x7b
+  Token::LBRACE,       // 0x7B
   Token::ILLEGAL,
-  Token::RBRACE,       // 0x7d
-  Token::BIT_NOT,      // 0x7e
+  Token::RBRACE,       // 0x7D
+  Token::BIT_NOT,      // 0x7E
   Token::ILLEGAL
 };
-
+// clang-format on
 
 Token::Value Scanner::Next() {
   if (next_.token == Token::EOS) {
@@ -405,7 +391,7 @@ Token::Value Scanner::Next() {
   }
   has_line_terminator_before_next_ = false;
   has_multiline_comment_before_next_ = false;
-  if (static_cast<unsigned>(c0_) <= 0x7f) {
+  if (static_cast<unsigned>(c0_) <= 0x7F) {
     Token::Value token = static_cast<Token::Value>(one_char_tokens[c0_]);
     if (token != Token::ILLEGAL) {
       int pos = source_pos();
@@ -457,7 +443,7 @@ Token::Value Scanner::SkipWhiteSpace() {
 
       // Advance as long as character is a WhiteSpace or LineTerminator.
       // Remember if the latter is the case.
-      if (IsLineTerminator(c0_)) {
+      if (unibrow::IsLineTerminator(c0_)) {
         has_line_terminator_before_next_ = true;
       } else if (!unicode_cache_->IsWhiteSpace(c0_)) {
         break;
@@ -514,7 +500,7 @@ Token::Value Scanner::SkipSingleLineComment() {
   // separately by the lexical grammar and becomes part of the
   // stream of input elements for the syntactic grammar (see
   // ECMA-262, section 7.4).
-  while (c0_ != kEndOfInput && !IsLineTerminator(c0_)) {
+  while (c0_ != kEndOfInput && !unibrow::IsLineTerminator(c0_)) {
     Advance();
   }
 
@@ -524,7 +510,7 @@ Token::Value Scanner::SkipSingleLineComment() {
 
 Token::Value Scanner::SkipSourceURLComment() {
   TryToParseSourceURLComment();
-  while (c0_ != kEndOfInput && !IsLineTerminator(c0_)) {
+  while (c0_ != kEndOfInput && !unibrow::IsLineTerminator(c0_)) {
     Advance();
   }
 
@@ -560,7 +546,7 @@ void Scanner::TryToParseSourceURLComment() {
   while (c0_ != kEndOfInput && unicode_cache_->IsWhiteSpace(c0_)) {
     Advance();
   }
-  while (c0_ != kEndOfInput && !IsLineTerminator(c0_)) {
+  while (c0_ != kEndOfInput && !unibrow::IsLineTerminator(c0_)) {
     // Disallowed characters.
     if (c0_ == '"' || c0_ == '\'') {
       value->Reset();
@@ -573,7 +559,7 @@ void Scanner::TryToParseSourceURLComment() {
     Advance();
   }
   // Allow whitespace at the end.
-  while (c0_ != kEndOfInput && !IsLineTerminator(c0_)) {
+  while (c0_ != kEndOfInput && !unibrow::IsLineTerminator(c0_)) {
     if (!unicode_cache_->IsWhiteSpace(c0_)) {
       value->Reset();
       break;
@@ -590,7 +576,7 @@ Token::Value Scanner::SkipMultiLineComment() {
   while (c0_ != kEndOfInput) {
     uc32 ch = c0_;
     Advance();
-    if (c0_ != kEndOfInput && IsLineTerminator(ch)) {
+    if (c0_ != kEndOfInput && unibrow::IsLineTerminator(ch)) {
       // Following ECMA-262, section 7.4, a comment containing
       // a newline will make the comment count as a line-terminator.
       has_multiline_comment_before_next_ = true;
@@ -875,6 +861,10 @@ void Scanner::Scan() {
         token = ScanTemplateStart();
         break;
 
+      case '#':
+        token = ScanPrivateName();
+        break;
+
       default:
         if (c0_ == kEndOfInput) {
           token = Token::EOS;
@@ -940,6 +930,7 @@ void Scanner::SanityCheckTokenDesc(const TokenDesc& token) const {
     case Token::REGEXP_LITERAL:
     case Token::SMI:
     case Token::STRING:
+    case Token::PRIVATE_NAME:
       DCHECK_NOT_NULL(token.literal_chars);
       DCHECK_NULL(token.raw_literal_chars);
       DCHECK_EQ(token.invalid_template_escape_message, MessageTemplate::kNone);
@@ -987,7 +978,8 @@ bool Scanner::ScanEscape() {
   Advance<capture_raw>();
 
   // Skip escaped newlines.
-  if (!in_template_literal && c0_ != kEndOfInput && IsLineTerminator(c)) {
+  if (!in_template_literal && c0_ != kEndOfInput &&
+      unibrow::IsLineTerminator(c)) {
     // Allow escaped CR+LF newlines in multiline string literals.
     if (IsCarriageReturn(c) && IsLineFeed(c0_)) Advance<capture_raw>();
     return true;
@@ -1023,7 +1015,7 @@ bool Scanner::ScanEscape() {
     case '5':  // fall through
     case '6':  // fall through
     case '7':
-      c = ScanOctalEscape<capture_raw>(c, 2);
+      c = ScanOctalEscape<capture_raw>(c, 2, in_template_literal);
       break;
   }
 
@@ -1032,9 +1024,8 @@ bool Scanner::ScanEscape() {
   return true;
 }
 
-
 template <bool capture_raw>
-uc32 Scanner::ScanOctalEscape(uc32 c, int length) {
+uc32 Scanner::ScanOctalEscape(uc32 c, int length, bool in_template_literal) {
   uc32 x = c - '0';
   int i = 0;
   for (; i < length; i++) {
@@ -1052,7 +1043,9 @@ uc32 Scanner::ScanOctalEscape(uc32 c, int length) {
   // occur before the "use strict" directive.
   if (c != '0' || i > 0 || c0_ == '8' || c0_ == '9') {
     octal_pos_ = Location(source_pos() - i - 1, source_pos() - 1);
-    octal_message_ = MessageTemplate::kStrictOctalEscape;
+    octal_message_ = in_template_literal
+                         ? MessageTemplate::kTemplateOctalLiteral
+                         : MessageTemplate::kStrictOctalEscape;
   }
   return x;
 }
@@ -1080,7 +1073,11 @@ Token::Value Scanner::ScanString() {
     AddLiteralChar(c);
   }
 
-  while (c0_ != quote && c0_ != kEndOfInput && !IsLineTerminator(c0_)) {
+  bool (*line_terminator_func)(unsigned int) =
+      FLAG_harmony_subsume_json ? unibrow::IsStringLiteralLineTerminator
+                                : unibrow::IsLineTerminator;
+
+  while (c0_ != quote && c0_ != kEndOfInput && !line_terminator_func(c0_)) {
     uc32 c = c0_;
     Advance();
     if (c == '\\') {
@@ -1098,6 +1095,26 @@ Token::Value Scanner::ScanString() {
   return Token::STRING;
 }
 
+Token::Value Scanner::ScanPrivateName() {
+  if (!allow_harmony_private_fields()) {
+    ReportScannerError(source_pos(),
+                       MessageTemplate::kInvalidOrUnexpectedToken);
+    return Token::ILLEGAL;
+  }
+
+  LiteralScope literal(this);
+  DCHECK_EQ(c0_, '#');
+  AddLiteralCharAdvance();
+  if (c0_ == kEndOfInput || !unicode_cache_->IsIdentifierStart(c0_)) {
+    PushBack(c0_);
+    ReportScannerError(source_pos(),
+                       MessageTemplate::kInvalidOrUnexpectedToken);
+    return Token::ILLEGAL;
+  }
+
+  Token::Value token = ScanIdentifierOrKeywordInner(&literal);
+  return token == Token::ILLEGAL ? Token::ILLEGAL : Token::PRIVATE_NAME;
+}
 
 Token::Value Scanner::ScanTemplateSpan() {
   // When scanning a TemplateSpan, we are looking for the following construct:
@@ -1136,7 +1153,7 @@ Token::Value Scanner::ScanTemplateSpan() {
       ReduceRawLiteralLength(2);
       break;
     } else if (c == '\\') {
-      if (c0_ != kEndOfInput && IsLineTerminator(c0_)) {
+      if (c0_ != kEndOfInput && unibrow::IsLineTerminator(c0_)) {
         // The TV of LineContinuation :: \ LineTerminatorSequence is the empty
         // code unit sequence.
         uc32 lastChar = c0_;
@@ -1208,23 +1225,168 @@ Handle<String> Scanner::SourceMappingUrl(Isolate* isolate) const {
   return tmp;
 }
 
-void Scanner::ScanDecimalDigits() {
-  while (IsDecimalDigit(c0_))
+bool Scanner::ScanDigitsWithNumericSeparators(bool (*predicate)(uc32 ch),
+                                              bool is_check_first_digit) {
+  // we must have at least one digit after 'x'/'b'/'o'
+  if (is_check_first_digit && !predicate(c0_)) return false;
+
+  bool separator_seen = false;
+  while (predicate(c0_) || c0_ == '_') {
+    if (c0_ == '_') {
+      Advance<false, false>();
+      if (c0_ == '_') {
+        ReportScannerError(Location(source_pos(), source_pos() + 1),
+                           MessageTemplate::kContinuousNumericSeparator);
+        return false;
+      }
+      separator_seen = true;
+      continue;
+    }
+    separator_seen = false;
     AddLiteralCharAdvance();
+  }
+
+  if (separator_seen) {
+    ReportScannerError(Location(source_pos(), source_pos() + 1),
+                       MessageTemplate::kTrailingNumericSeparator);
+    return false;
+  }
+
+  return true;
 }
 
+bool Scanner::ScanDecimalDigits() {
+  if (allow_harmony_numeric_separator()) {
+    return ScanDigitsWithNumericSeparators(&IsDecimalDigit, false);
+  }
+  while (IsDecimalDigit(c0_)) {
+    AddLiteralCharAdvance();
+  }
+  return true;
+}
+
+bool Scanner::ScanDecimalAsSmiWithNumericSeparators(uint64_t* value) {
+  bool separator_seen = false;
+  while (IsDecimalDigit(c0_) || c0_ == '_') {
+    if (c0_ == '_') {
+      Advance<false, false>();
+      if (c0_ == '_') {
+        ReportScannerError(Location(source_pos(), source_pos() + 1),
+                           MessageTemplate::kContinuousNumericSeparator);
+        return false;
+      }
+      separator_seen = true;
+      continue;
+    }
+    separator_seen = false;
+    *value = 10 * *value + (c0_ - '0');
+    uc32 first_char = c0_;
+    Advance<false, false>();
+    AddLiteralChar(first_char);
+  }
+
+  if (separator_seen) {
+    ReportScannerError(Location(source_pos(), source_pos() + 1),
+                       MessageTemplate::kTrailingNumericSeparator);
+    return false;
+  }
+
+  return true;
+}
+
+bool Scanner::ScanDecimalAsSmi(uint64_t* value) {
+  if (allow_harmony_numeric_separator()) {
+    return ScanDecimalAsSmiWithNumericSeparators(value);
+  }
+
+  while (IsDecimalDigit(c0_)) {
+    *value = 10 * *value + (c0_ - '0');
+    uc32 first_char = c0_;
+    Advance<false, false>();
+    AddLiteralChar(first_char);
+  }
+  return true;
+}
+
+bool Scanner::ScanBinaryDigits() {
+  if (allow_harmony_numeric_separator()) {
+    return ScanDigitsWithNumericSeparators(&IsBinaryDigit, true);
+  }
+
+  // we must have at least one binary digit after 'b'/'B'
+  if (!IsBinaryDigit(c0_)) {
+    return false;
+  }
+
+  while (IsBinaryDigit(c0_)) {
+    AddLiteralCharAdvance();
+  }
+  return true;
+}
+
+bool Scanner::ScanOctalDigits() {
+  if (allow_harmony_numeric_separator()) {
+    return ScanDigitsWithNumericSeparators(&IsOctalDigit, true);
+  }
+
+  // we must have at least one octal digit after 'o'/'O'
+  if (!IsOctalDigit(c0_)) {
+    return false;
+  }
+
+  while (IsOctalDigit(c0_)) {
+    AddLiteralCharAdvance();
+  }
+  return true;
+}
+
+bool Scanner::ScanImplicitOctalDigits(int start_pos,
+                                      Scanner::NumberKind* kind) {
+  *kind = IMPLICIT_OCTAL;
+
+  while (true) {
+    // (possible) octal number
+    if (c0_ == '8' || c0_ == '9') {
+      *kind = DECIMAL_WITH_LEADING_ZERO;
+      return true;
+    }
+    if (c0_ < '0' || '7' < c0_) {
+      // Octal literal finished.
+      octal_pos_ = Location(start_pos, source_pos());
+      octal_message_ = MessageTemplate::kStrictOctalLiteral;
+      return true;
+    }
+    AddLiteralCharAdvance();
+  }
+}
+
+bool Scanner::ScanHexDigits() {
+  if (allow_harmony_numeric_separator()) {
+    return ScanDigitsWithNumericSeparators(&IsHexDigit, true);
+  }
+
+  // we must have at least one hex digit after 'x'/'X'
+  if (!IsHexDigit(c0_)) {
+    return false;
+  }
+
+  while (IsHexDigit(c0_)) {
+    AddLiteralCharAdvance();
+  }
+  return true;
+}
+
+bool Scanner::ScanSignedInteger() {
+  if (c0_ == '+' || c0_ == '-') AddLiteralCharAdvance();
+  // we must have at least one decimal digit after 'e'/'E'
+  if (!IsDecimalDigit(c0_)) return false;
+  return ScanDecimalDigits();
+}
 
 Token::Value Scanner::ScanNumber(bool seen_period) {
   DCHECK(IsDecimalDigit(c0_));  // the first digit of the number or the fraction
 
-  enum {
-    DECIMAL,
-    DECIMAL_WITH_LEADING_ZERO,
-    HEX,
-    OCTAL,
-    IMPLICIT_OCTAL,
-    BINARY
-  } kind = DECIMAL;
+  NumberKind kind = DECIMAL;
 
   LiteralScope literal(this);
   bool at_start = !seen_period;
@@ -1232,8 +1394,11 @@ Token::Value Scanner::ScanNumber(bool seen_period) {
   if (seen_period) {
     // we have already seen a decimal point of the float
     AddLiteralChar('.');
-    ScanDecimalDigits();  // we know we have at least one digit
-
+    if (allow_harmony_numeric_separator() && c0_ == '_') {
+      return Token::ILLEGAL;
+    }
+    // we know we have at least one digit
+    if (!ScanDecimalDigits()) return Token::ILLEGAL;
   } else {
     // if the first character is '0' we must check for octals and hex
     if (c0_ == '0') {
@@ -1242,68 +1407,42 @@ Token::Value Scanner::ScanNumber(bool seen_period) {
       // either 0, 0exxx, 0Exxx, 0.xxx, a hex number, a binary number or
       // an octal number.
       if (c0_ == 'x' || c0_ == 'X') {
-        // hex number
+        AddLiteralCharAdvance();
         kind = HEX;
-        AddLiteralCharAdvance();
-        if (!IsHexDigit(c0_)) {
-          // we must have at least one hex digit after 'x'/'X'
-          return Token::ILLEGAL;
-        }
-        while (IsHexDigit(c0_)) {
-          AddLiteralCharAdvance();
-        }
+        if (!ScanHexDigits()) return Token::ILLEGAL;
       } else if (c0_ == 'o' || c0_ == 'O') {
+        AddLiteralCharAdvance();
         kind = OCTAL;
-        AddLiteralCharAdvance();
-        if (!IsOctalDigit(c0_)) {
-          // we must have at least one octal digit after 'o'/'O'
-          return Token::ILLEGAL;
-        }
-        while (IsOctalDigit(c0_)) {
-          AddLiteralCharAdvance();
-        }
+        if (!ScanOctalDigits()) return Token::ILLEGAL;
       } else if (c0_ == 'b' || c0_ == 'B') {
-        kind = BINARY;
         AddLiteralCharAdvance();
-        if (!IsBinaryDigit(c0_)) {
-          // we must have at least one binary digit after 'b'/'B'
+        kind = BINARY;
+        if (!ScanBinaryDigits()) return Token::ILLEGAL;
+      } else if ('0' <= c0_ && c0_ <= '7') {
+        kind = IMPLICIT_OCTAL;
+        if (!ScanImplicitOctalDigits(start_pos, &kind)) {
           return Token::ILLEGAL;
         }
-        while (IsBinaryDigit(c0_)) {
-          AddLiteralCharAdvance();
-        }
-      } else if ('0' <= c0_ && c0_ <= '7') {
-        // (possible) octal number
-        kind = IMPLICIT_OCTAL;
-        while (true) {
-          if (c0_ == '8' || c0_ == '9') {
-            at_start = false;
-            kind = DECIMAL_WITH_LEADING_ZERO;
-            break;
-          }
-          if (c0_  < '0' || '7'  < c0_) {
-            // Octal literal finished.
-            octal_pos_ = Location(start_pos, source_pos());
-            octal_message_ = MessageTemplate::kStrictOctalLiteral;
-            break;
-          }
-          AddLiteralCharAdvance();
+        if (kind == DECIMAL_WITH_LEADING_ZERO) {
+          at_start = false;
         }
       } else if (c0_ == '8' || c0_ == '9') {
         kind = DECIMAL_WITH_LEADING_ZERO;
+      } else if (allow_harmony_numeric_separator() && c0_ == '_') {
+        ReportScannerError(Location(source_pos(), source_pos() + 1),
+                           MessageTemplate::kZeroDigitNumericSeparator);
+        return Token::ILLEGAL;
       }
     }
 
     // Parse decimal digits and allow trailing fractional part.
     if (kind == DECIMAL || kind == DECIMAL_WITH_LEADING_ZERO) {
+      // This is an optimization for parsing Decimal numbers as Smi's.
       if (at_start) {
         uint64_t value = 0;
-        while (IsDecimalDigit(c0_)) {
-          value = 10 * value + (c0_ - '0');
-
-          uc32 first_char = c0_;
-          Advance<false, false>();
-          AddLiteralChar(first_char);
+        // scan subsequent decimal digits
+        if (!ScanDecimalAsSmi(&value)) {
+          return Token::ILLEGAL;
         }
 
         if (next_.literal_chars->one_byte_literal().length() <= 10 &&
@@ -1322,11 +1461,14 @@ Token::Value Scanner::ScanNumber(bool seen_period) {
         HandleLeadSurrogate();
       }
 
-      ScanDecimalDigits();  // optional
+      if (!ScanDecimalDigits()) return Token::ILLEGAL;
       if (c0_ == '.') {
         seen_period = true;
         AddLiteralCharAdvance();
-        ScanDecimalDigits();  // optional
+        if (allow_harmony_numeric_separator() && c0_ == '_') {
+          return Token::ILLEGAL;
+        }
+        if (!ScanDecimalDigits()) return Token::ILLEGAL;
       }
     }
   }
@@ -1350,17 +1492,14 @@ Token::Value Scanner::ScanNumber(bool seen_period) {
   } else if (c0_ == 'e' || c0_ == 'E') {
     // scan exponent, if any
     DCHECK(kind != HEX);  // 'e'/'E' must be scanned as part of the hex number
+
     if (!(kind == DECIMAL || kind == DECIMAL_WITH_LEADING_ZERO))
       return Token::ILLEGAL;
+
     // scan exponent
     AddLiteralCharAdvance();
-    if (c0_ == '+' || c0_ == '-')
-      AddLiteralCharAdvance();
-    if (!IsDecimalDigit(c0_)) {
-      // we must have at least one decimal digit after 'e'/'E'
-      return Token::ILLEGAL;
-    }
-    ScanDecimalDigits();
+
+    if (!ScanSignedInteger()) return Token::ILLEGAL;
   }
 
   // The source character immediately following a numeric literal must
@@ -1397,7 +1536,7 @@ uc32 Scanner::ScanUnicodeEscape() {
   if (c0_ == '{') {
     int begin = source_pos() - 2;
     Advance<capture_raw>();
-    uc32 cp = ScanUnlimitedLengthHexNumber<capture_raw>(0x10ffff, begin);
+    uc32 cp = ScanUnlimitedLengthHexNumber<capture_raw>(0x10FFFF, begin);
     if (cp < 0 || c0_ != '}') {
       ReportScannerError(source_pos(),
                          MessageTemplate::kInvalidUnicodeEscapeSequence);
@@ -1475,7 +1614,6 @@ uc32 Scanner::ScanUnicodeEscape() {
   KEYWORD_GROUP('r')                                        \
   KEYWORD("return", Token::RETURN)                          \
   KEYWORD_GROUP('s')                                        \
-  KEYWORD("sent", Token::SENT)                              \
   KEYWORD("set", Token::SET)                                \
   KEYWORD("static", Token::STATIC)                          \
   KEYWORD("super", Token::SUPER)                            \
@@ -1498,13 +1636,15 @@ uc32 Scanner::ScanUnicodeEscape() {
   KEYWORD_GROUP('y')                                        \
   KEYWORD("yield", Token::YIELD)                            \
   KEYWORD_GROUP('_')                                        \
-  KEYWORD("__proto__", Token::PROTO_UNDERSCORED)
+  KEYWORD("__proto__", Token::PROTO_UNDERSCORED)            \
+  KEYWORD_GROUP('#')                                        \
+  KEYWORD("#constructor", Token::PRIVATE_CONSTRUCTOR)
 
 static Token::Value KeywordOrIdentifierToken(const uint8_t* input,
                                              int input_length) {
   DCHECK_GE(input_length, 1);
   const int kMinLength = 2;
-  const int kMaxLength = 11;
+  const int kMaxLength = 12;
   if (input_length < kMinLength || input_length > kMaxLength) {
     return Token::IDENTIFIER;
   }
@@ -1539,12 +1679,18 @@ static Token::Value KeywordOrIdentifierToken(const uint8_t* input,
       KEYWORDS(KEYWORD_GROUP_CASE, KEYWORD)
   }
   return Token::IDENTIFIER;
+#undef KEYWORDS
+#undef KEYWORD
+#undef KEYWORD_GROUP_CASE
 }
 
-
 Token::Value Scanner::ScanIdentifierOrKeyword() {
-  DCHECK(unicode_cache_->IsIdentifierStart(c0_));
   LiteralScope literal(this);
+  return ScanIdentifierOrKeywordInner(&literal);
+}
+
+Token::Value Scanner::ScanIdentifierOrKeywordInner(LiteralScope* literal) {
+  DCHECK(unicode_cache_->IsIdentifierStart(c0_));
   if (IsInRange(c0_, 'a', 'z') || c0_ == '_') {
     do {
       char first_char = static_cast<char>(c0_);
@@ -1564,7 +1710,7 @@ Token::Value Scanner::ScanIdentifierOrKeyword() {
         AddLiteralChar(first_char);
       }
       if (c0_ <= kMaxAscii && c0_ != '\\') {
-        literal.Complete();
+        literal->Complete();
         return Token::IDENTIFIER;
       }
     } else if (c0_ <= kMaxAscii && c0_ != '\\') {
@@ -1575,7 +1721,7 @@ Token::Value Scanner::ScanIdentifierOrKeyword() {
       if (token == Token::IDENTIFIER ||
           token == Token::FUTURE_STRICT_RESERVED_WORD ||
           Token::IsContextualKeyword(token))
-        literal.Complete();
+        literal->Complete();
       return token;
     }
 
@@ -1588,7 +1734,7 @@ Token::Value Scanner::ScanIdentifierOrKeyword() {
     } while (IsAsciiIdentifier(c0_));
 
     if (c0_ <= kMaxAscii && c0_ != '\\') {
-      literal.Complete();
+      literal->Complete();
       return Token::IDENTIFIER;
     }
 
@@ -1603,7 +1749,7 @@ Token::Value Scanner::ScanIdentifierOrKeyword() {
       return Token::ILLEGAL;
     }
     AddLiteralChar(c);
-    return ScanIdentifierSuffix(&literal, true);
+    return ScanIdentifierSuffix(literal, true);
   } else {
     uc32 first_char = c0_;
     Advance();
@@ -1619,7 +1765,7 @@ Token::Value Scanner::ScanIdentifierOrKeyword() {
       continue;
     }
     // Fallthrough if no longer able to complete keyword.
-    return ScanIdentifierSuffix(&literal, false);
+    return ScanIdentifierSuffix(literal, false);
   }
 
   if (next_.literal_chars->is_one_byte()) {
@@ -1629,10 +1775,10 @@ Token::Value Scanner::ScanIdentifierOrKeyword() {
     if (token == Token::IDENTIFIER ||
         token == Token::FUTURE_STRICT_RESERVED_WORD ||
         Token::IsContextualKeyword(token))
-      literal.Complete();
+      literal->Complete();
     return token;
   }
-  literal.Complete();
+  literal->Complete();
   return Token::IDENTIFIER;
 }
 
@@ -1697,12 +1843,12 @@ bool Scanner::ScanRegExpPattern() {
   }
 
   while (c0_ != '/' || in_character_class) {
-    if (c0_ == kEndOfInput || IsLineTerminator(c0_)) {
+    if (c0_ == kEndOfInput || unibrow::IsLineTerminator(c0_)) {
       return false;
     }
     if (c0_ == '\\') {  // Escape sequence.
       AddLiteralCharAdvance();
-      if (c0_ == kEndOfInput || IsLineTerminator(c0_)) {
+      if (c0_ == kEndOfInput || unibrow::IsLineTerminator(c0_)) {
         return false;
       }
       AddLiteralCharAdvance();

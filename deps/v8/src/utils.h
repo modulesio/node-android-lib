@@ -18,6 +18,7 @@
 #include "src/base/logging.h"
 #include "src/base/macros.h"
 #include "src/base/platform/platform.h"
+#include "src/base/v8-fallthrough.h"
 #include "src/globals.h"
 #include "src/vector.h"
 #include "src/zone/zone.h"
@@ -79,9 +80,15 @@ inline int WhichPowerOf2(T x) {
 #undef CHECK_BIGGER
   switch (x) {
     default: UNREACHABLE();
-    case 8: bits++;  // Fall through.
-    case 4: bits++;  // Fall through.
-    case 2: bits++;  // Fall through.
+    case 8:
+      bits++;
+      V8_FALLTHROUGH;
+    case 4:
+      bits++;
+      V8_FALLTHROUGH;
+    case 2:
+      bits++;
+      V8_FALLTHROUGH;
     case 1: break;
   }
   DCHECK_EQ(T{1} << bits, original_x);
@@ -384,9 +391,9 @@ class BitField64 : public BitFieldBase<T, shift, size, uint64_t> { };
 #define DEFINE_BIT_FIELD_RANGE_TYPE(Name, Type, Size, _) \
   k##Name##Start, k##Name##End = k##Name##Start + Size - 1,
 
-#define DEFINE_BIT_RANGES(LIST_MACRO)                    \
-  struct LIST_MACRO##_Ranges {                           \
-    enum { LIST_MACRO(DEFINE_BIT_FIELD_RANGE_TYPE, _) }; \
+#define DEFINE_BIT_RANGES(LIST_MACRO)                               \
+  struct LIST_MACRO##_Ranges {                                      \
+    enum { LIST_MACRO(DEFINE_BIT_FIELD_RANGE_TYPE, _) kBitsCount }; \
   };
 
 #define DEFINE_BIT_FIELD_TYPE(Name, Type, Size, RangesName) \
@@ -641,7 +648,7 @@ class Access {
 template<typename T>
 class SetOncePointer {
  public:
-  SetOncePointer() : pointer_(nullptr) {}
+  SetOncePointer() = default;
 
   bool is_set() const { return pointer_ != nullptr; }
 
@@ -655,8 +662,16 @@ class SetOncePointer {
     pointer_ = value;
   }
 
+  T* operator=(T* value) {
+    set(value);
+    return value;
+  }
+
+  bool operator==(std::nullptr_t) const { return pointer_ == nullptr; }
+  bool operator!=(std::nullptr_t) const { return pointer_ != nullptr; }
+
  private:
-  T* pointer_;
+  T* pointer_ = nullptr;
 };
 
 
@@ -1564,6 +1579,7 @@ inline uintptr_t GetCurrentStackPosition() {
 
 template <typename V>
 static inline V ReadUnalignedValue(const void* p) {
+  ASSERT_TRIVIALLY_COPYABLE(V);
 #if !(V8_TARGET_ARCH_MIPS || V8_TARGET_ARCH_MIPS64 || V8_TARGET_ARCH_ARM)
   return *reinterpret_cast<const V*>(p);
 #else   // V8_TARGET_ARCH_MIPS || V8_TARGET_ARCH_MIPS64 || V8_TARGET_ARCH_ARM
@@ -1575,6 +1591,7 @@ static inline V ReadUnalignedValue(const void* p) {
 
 template <typename V>
 static inline void WriteUnalignedValue(void* p, V value) {
+  ASSERT_TRIVIALLY_COPYABLE(V);
 #if !(V8_TARGET_ARCH_MIPS || V8_TARGET_ARCH_MIPS64 || V8_TARGET_ARCH_ARM)
   *(reinterpret_cast<V*>(p)) = value;
 #else   // V8_TARGET_ARCH_MIPS || V8_TARGET_ARCH_MIPS64 || V8_TARGET_ARCH_ARM
@@ -1636,6 +1653,49 @@ static inline void WriteLittleEndianValue(void* p, V value) {
     dst[i] = src[sizeof(V) - i - 1];
   }
 #endif  // V8_TARGET_LITTLE_ENDIAN
+}
+
+template <typename V>
+static inline V ByteReverse(V value) {
+  size_t size_of_v = sizeof(value);
+  switch (size_of_v) {
+    case 2:
+#if V8_HAS_BUILTIN_BSWAP16
+      return __builtin_bswap16(value);
+#else
+      return value << 8 | (value >> 8 & 0x00FF);
+#endif
+    case 4:
+#if V8_HAS_BUILTIN_BSWAP32
+      return __builtin_bswap32(value);
+#else
+    {
+      size_t bits_of_v = size_of_v * kBitsPerByte;
+      return value << (bits_of_v - 8) |
+             ((value << (bits_of_v - 24)) & 0x00FF0000) |
+             ((value >> (bits_of_v - 24)) & 0x0000FF00) |
+             ((value >> (bits_of_v - 8)) & 0x00000FF);
+    }
+#endif
+    case 8:
+#if V8_HAS_BUILTIN_BSWAP64
+      return __builtin_bswap64(value);
+#else
+    {
+      size_t bits_of_v = size_of_v * kBitsPerByte;
+      return value << (bits_of_v - 8) |
+             ((value << (bits_of_v - 24)) & 0x00FF000000000000) |
+             ((value << (bits_of_v - 40)) & 0x0000FF0000000000) |
+             ((value << (bits_of_v - 56)) & 0x000000FF00000000) |
+             ((value >> (bits_of_v - 56)) & 0x00000000FF000000) |
+             ((value >> (bits_of_v - 40)) & 0x0000000000FF0000) |
+             ((value >> (bits_of_v - 24)) & 0x000000000000FF00) |
+             ((value >> (bits_of_v - 8)) & 0x00000000000000FF);
+    }
+#endif
+    default:
+      UNREACHABLE();
+  }
 }
 
 // Represents a linked list that threads through the nodes in the linked list.

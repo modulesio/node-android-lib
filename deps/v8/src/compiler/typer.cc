@@ -254,6 +254,9 @@ class Typer::Visitor : public Reducer {
   Type* TypeUnaryOp(Node* node, UnaryTyperFun);
   Type* TypeBinaryOp(Node* node, BinaryTyperFun);
 
+  static Type* BinaryNumberOpTyper(Type* lhs, Type* rhs, Typer* t,
+                                   BinaryTyperFun f);
+
   enum ComparisonOutcomeFlags {
     kComparisonTrue = 1,
     kComparisonFalse = 2,
@@ -322,8 +325,8 @@ class Typer::Visitor : public Reducer {
   static Type* NumberLessThanOrEqualTyper(Type*, Type*, Typer*);
   static Type* ReferenceEqualTyper(Type*, Type*, Typer*);
   static Type* SameValueTyper(Type*, Type*, Typer*);
-  static Type* StringFromCharCodeTyper(Type*, Typer*);
-  static Type* StringFromCodePointTyper(Type*, Typer*);
+  static Type* StringFromSingleCharCodeTyper(Type*, Typer*);
+  static Type* StringFromSingleCodePointTyper(Type*, Typer*);
 
   Reduction UpdateType(Node* node, Type* current) {
     if (NodeProperties::IsTyped(node)) {
@@ -399,7 +402,6 @@ Type* Typer::Visitor::TypeUnaryOp(Node* node, UnaryTyperFun f) {
   return input->IsNone() ? Type::None() : f(input, typer_);
 }
 
-
 Type* Typer::Visitor::TypeBinaryOp(Node* node, BinaryTyperFun f) {
   Type* left = Operand(node, 0);
   Type* right = Operand(node, 1);
@@ -407,6 +409,23 @@ Type* Typer::Visitor::TypeBinaryOp(Node* node, BinaryTyperFun f) {
                                            : f(left, right, typer_);
 }
 
+Type* Typer::Visitor::BinaryNumberOpTyper(Type* lhs, Type* rhs, Typer* t,
+                                          BinaryTyperFun f) {
+  lhs = ToNumeric(lhs, t);
+  rhs = ToNumeric(rhs, t);
+  bool lhs_is_number = lhs->Is(Type::Number());
+  bool rhs_is_number = rhs->Is(Type::Number());
+  if (lhs_is_number && rhs_is_number) {
+    return f(lhs, rhs, t);
+  }
+  if (lhs_is_number || rhs_is_number) {
+    return Type::Number();
+  }
+  if (lhs->Is(Type::BigInt()) || rhs->Is(Type::BigInt())) {
+    return Type::BigInt();
+  }
+  return Type::Numeric();
+}
 
 Typer::Visitor::ComparisonOutcome Typer::Visitor::Invert(
     ComparisonOutcome outcome, Typer* t) {
@@ -416,7 +435,6 @@ Typer::Visitor::ComparisonOutcome Typer::Visitor::Invert(
   if ((outcome & kComparisonFalse) != 0) result |= kComparisonTrue;
   return result;
 }
-
 
 Type* Typer::Visitor::FalsifyUndefined(ComparisonOutcome outcome, Typer* t) {
   if ((outcome & kComparisonFalse) != 0 ||
@@ -716,12 +734,12 @@ Type* Typer::Visitor::TypeFloat64Constant(Node* node) {
 }
 
 Type* Typer::Visitor::TypeNumberConstant(Node* node) {
-  double number = OpParameter<double>(node);
+  double number = OpParameter<double>(node->op());
   return Type::NewConstant(number, zone());
 }
 
 Type* Typer::Visitor::TypeHeapConstant(Node* node) {
-  return TypeConstant(OpParameter<Handle<HeapObject>>(node));
+  return TypeConstant(HeapConstantOf(node->op()));
 }
 
 Type* Typer::Visitor::TypeExternalConstant(Node* node) {
@@ -947,7 +965,7 @@ Type* Typer::Visitor::TypeDead(Node* node) { return Type::None(); }
 
 Type* Typer::Visitor::TypeDeadValue(Node* node) { return Type::None(); }
 
-Type* Typer::Visitor::TypeUnreachable(Node* node) { UNREACHABLE(); }
+Type* Typer::Visitor::TypeUnreachable(Node* node) { return Type::None(); }
 
 // JS comparison operators.
 
@@ -1052,53 +1070,23 @@ Type* Typer::Visitor::JSGreaterThanOrEqualTyper(
 
 
 Type* Typer::Visitor::JSBitwiseOrTyper(Type* lhs, Type* rhs, Typer* t) {
-  lhs = ToNumeric(lhs, t);
-  rhs = ToNumeric(rhs, t);
-  if (lhs->Is(Type::Number()) && rhs->Is(Type::Number())) {
-    return NumberBitwiseOr(lhs, rhs, t);
-  }
-  return Type::Numeric();
+  return BinaryNumberOpTyper(lhs, rhs, t, NumberBitwiseOr);
 }
-
 
 Type* Typer::Visitor::JSBitwiseAndTyper(Type* lhs, Type* rhs, Typer* t) {
-  lhs = ToNumeric(lhs, t);
-  rhs = ToNumeric(rhs, t);
-  if (lhs->Is(Type::Number()) && rhs->Is(Type::Number())) {
-    return NumberBitwiseAnd(lhs, rhs, t);
-  }
-  return Type::Numeric();
+  return BinaryNumberOpTyper(lhs, rhs, t, NumberBitwiseAnd);
 }
-
 
 Type* Typer::Visitor::JSBitwiseXorTyper(Type* lhs, Type* rhs, Typer* t) {
-  lhs = ToNumeric(lhs, t);
-  rhs = ToNumeric(rhs, t);
-  if (lhs->Is(Type::Number()) && rhs->Is(Type::Number())) {
-    return NumberBitwiseXor(lhs, rhs, t);
-  }
-  return Type::Numeric();
+  return BinaryNumberOpTyper(lhs, rhs, t, NumberBitwiseXor);
 }
-
 
 Type* Typer::Visitor::JSShiftLeftTyper(Type* lhs, Type* rhs, Typer* t) {
-  return NumberShiftLeft(ToNumber(lhs, t), ToNumber(rhs, t), t);
-  lhs = ToNumeric(lhs, t);
-  rhs = ToNumeric(rhs, t);
-  if (lhs->Is(Type::Number()) && rhs->Is(Type::Number())) {
-    return NumberShiftLeft(lhs, rhs, t);
-  }
-  return Type::Numeric();
+  return BinaryNumberOpTyper(lhs, rhs, t, NumberShiftLeft);
 }
 
-
 Type* Typer::Visitor::JSShiftRightTyper(Type* lhs, Type* rhs, Typer* t) {
-  lhs = ToNumeric(lhs, t);
-  rhs = ToNumeric(rhs, t);
-  if (lhs->Is(Type::Number()) && rhs->Is(Type::Number())) {
-    return NumberShiftRight(lhs, rhs, t);
-  }
-  return Type::Numeric();
+  return BinaryNumberOpTyper(lhs, rhs, t, NumberShiftRight);
 }
 
 
@@ -1120,51 +1108,27 @@ Type* Typer::Visitor::JSAddTyper(Type* lhs, Type* rhs, Typer* t) {
     }
   }
   // The addition must be numeric.
-  lhs = ToNumeric(lhs, t);
-  rhs = ToNumeric(rhs, t);
-  if (lhs->Is(Type::Number()) && rhs->Is(Type::Number())) {
-    return NumberAdd(lhs, rhs, t);
-  }
-  return Type::Numeric();
+  return BinaryNumberOpTyper(lhs, rhs, t, NumberAdd);
 }
 
 Type* Typer::Visitor::JSSubtractTyper(Type* lhs, Type* rhs, Typer* t) {
-  lhs = ToNumeric(lhs, t);
-  rhs = ToNumeric(rhs, t);
-  if (lhs->Is(Type::Number()) && rhs->Is(Type::Number())) {
-    return NumberSubtract(lhs, rhs, t);
-  }
-  return Type::Numeric();
+  return BinaryNumberOpTyper(lhs, rhs, t, NumberSubtract);
 }
 
 Type* Typer::Visitor::JSMultiplyTyper(Type* lhs, Type* rhs, Typer* t) {
-  lhs = ToNumeric(lhs, t);
-  rhs = ToNumeric(rhs, t);
-  if (lhs->Is(Type::Number()) && rhs->Is(Type::Number())) {
-    return NumberMultiply(lhs, rhs, t);
-  }
-  return Type::Numeric();
+  return BinaryNumberOpTyper(lhs, rhs, t, NumberMultiply);
 }
 
 Type* Typer::Visitor::JSDivideTyper(Type* lhs, Type* rhs, Typer* t) {
-  lhs = ToNumeric(lhs, t);
-  rhs = ToNumeric(rhs, t);
-  if (lhs->Is(Type::Number()) && rhs->Is(Type::Number())) {
-    return NumberDivide(lhs, rhs, t);
-  }
-  return Type::Numeric();
+  return BinaryNumberOpTyper(lhs, rhs, t, NumberDivide);
 }
 
 Type* Typer::Visitor::JSModulusTyper(Type* lhs, Type* rhs, Typer* t) {
-  lhs = ToNumeric(lhs, t);
-  rhs = ToNumeric(rhs, t);
-  if (lhs->Is(Type::Number()) && rhs->Is(Type::Number())) {
-    return NumberModulus(lhs, rhs, t);
-  }
-  return Type::Numeric();
+  return BinaryNumberOpTyper(lhs, rhs, t, NumberModulus);
 }
 
 Type* Typer::Visitor::JSExponentiateTyper(Type* lhs, Type* rhs, Typer* t) {
+  // TODO(neis): Refine using BinaryNumberOpTyper?
   return Type::Numeric();
 }
 
@@ -1184,10 +1148,6 @@ Type* Typer::Visitor::TypeJSIncrement(Node* node) {
 
 Type* Typer::Visitor::TypeJSNegate(Node* node) {
   return TypeUnaryOp(node, Negate);
-}
-
-Type* Typer::Visitor::TypeClassOf(Node* node) {
-  return Type::InternalizedStringOrNull();
 }
 
 Type* Typer::Visitor::TypeTypeOf(Node* node) {
@@ -1248,6 +1208,14 @@ Type* Typer::Visitor::TypeJSCreateArguments(Node* node) {
 
 Type* Typer::Visitor::TypeJSCreateArray(Node* node) { return Type::Array(); }
 
+Type* Typer::Visitor::TypeJSCreateArrayIterator(Node* node) {
+  return Type::OtherObject();
+}
+
+Type* Typer::Visitor::TypeJSCreateCollectionIterator(Node* node) {
+  return Type::OtherObject();
+}
+
 Type* Typer::Visitor::TypeJSCreateBoundFunction(Node* node) {
   return Type::BoundFunction();
 }
@@ -1265,7 +1233,19 @@ Type* Typer::Visitor::TypeJSCreateIterResultObject(Node* node) {
   return Type::OtherObject();
 }
 
+Type* Typer::Visitor::TypeJSCreateStringIterator(Node* node) {
+  return Type::OtherObject();
+}
+
 Type* Typer::Visitor::TypeJSCreateKeyValueArray(Node* node) {
+  return Type::OtherObject();
+}
+
+Type* Typer::Visitor::TypeJSCreatePromise(Node* node) {
+  return Type::OtherObject();
+}
+
+Type* Typer::Visitor::TypeJSCreateTypedArray(Node* node) {
   return Type::OtherObject();
 }
 
@@ -1405,6 +1385,8 @@ Type* Typer::Visitor::TypeJSStoreNamedOwn(Node* node) {
 Type* Typer::Visitor::TypeJSStoreDataPropertyInLiteral(Node* node) {
   UNREACHABLE();
 }
+
+Type* Typer::Visitor::TypeJSStoreInArrayLiteral(Node* node) { UNREACHABLE(); }
 
 Type* Typer::Visitor::TypeJSDeleteProperty(Node* node) {
   return Type::Boolean();
@@ -1556,7 +1538,17 @@ Type* Typer::Visitor::JSCallTyper(Type* fun, Typer* t) {
         case kDateGetTime:
           return t->cache_.kJSDateValueType;
 
+        // Symbol functions.
+        case kSymbolConstructor:
+          return Type::Symbol();
+
+        // BigInt functions.
+        case kBigIntConstructor:
+          return Type::BigInt();
+
         // Number functions.
+        case kNumberConstructor:
+          return Type::Number();
         case kNumberIsFinite:
         case kNumberIsInteger:
         case kNumberIsNaN:
@@ -1570,6 +1562,8 @@ Type* Typer::Visitor::JSCallTyper(Type* fun, Typer* t) {
           return Type::String();
 
         // String functions.
+        case kStringConstructor:
+          return Type::String();
         case kStringCharCodeAt:
           return Type::Union(Type::Range(0, kMaxUInt16, t->zone()), Type::NaN(),
                              t->zone());
@@ -1600,8 +1594,8 @@ Type* Typer::Visitor::JSCallTyper(Type* fun, Typer* t) {
         case kStringToString:
         case kStringToUpperCase:
         case kStringTrim:
-        case kStringTrimLeft:
-        case kStringTrimRight:
+        case kStringTrimEnd:
+        case kStringTrimStart:
         case kStringValueOf:
           return Type::String();
 
@@ -1792,8 +1786,6 @@ Type* Typer::Visitor::TypeJSCallRuntime(Node* node) {
       return TypeUnaryOp(node, ToObject);
     case Runtime::kInlineToString:
       return TypeUnaryOp(node, ToString);
-    case Runtime::kInlineClassOf:
-      return Type::InternalizedStringOrNull();
     case Runtime::kHasInPrototypeChain:
       return Type::Boolean();
     default:
@@ -1846,13 +1838,41 @@ Type* Typer::Visitor::TypeJSGeneratorRestoreContinuation(Node* node) {
   return Type::SignedSmall();
 }
 
+Type* Typer::Visitor::TypeJSGeneratorRestoreContext(Node* node) {
+  return Type::Any();
+}
+
 Type* Typer::Visitor::TypeJSGeneratorRestoreRegister(Node* node) {
+  return Type::Any();
+}
+
+Type* Typer::Visitor::TypeJSGeneratorRestoreInputOrDebugPos(Node* node) {
   return Type::Any();
 }
 
 Type* Typer::Visitor::TypeJSStackCheck(Node* node) { return Type::Any(); }
 
 Type* Typer::Visitor::TypeJSDebugger(Node* node) { return Type::Any(); }
+
+Type* Typer::Visitor::TypeJSFulfillPromise(Node* node) {
+  return Type::Undefined();
+}
+
+Type* Typer::Visitor::TypeJSPerformPromiseThen(Node* node) {
+  return Type::Receiver();
+}
+
+Type* Typer::Visitor::TypeJSPromiseResolve(Node* node) {
+  return Type::Receiver();
+}
+
+Type* Typer::Visitor::TypeJSRejectPromise(Node* node) {
+  return Type::Undefined();
+}
+
+Type* Typer::Visitor::TypeJSResolvePromise(Node* node) {
+  return Type::Undefined();
+}
 
 // Simplified operators.
 
@@ -1946,37 +1966,47 @@ Type* Typer::Visitor::TypeStringLessThanOrEqual(Node* node) {
   return Type::Boolean();
 }
 
-Type* Typer::Visitor::StringFromCharCodeTyper(Type* type, Typer* t) {
+Type* Typer::Visitor::StringFromSingleCharCodeTyper(Type* type, Typer* t) {
   return Type::String();
 }
 
-Type* Typer::Visitor::StringFromCodePointTyper(Type* type, Typer* t) {
+Type* Typer::Visitor::StringFromSingleCodePointTyper(Type* type, Typer* t) {
   return Type::String();
 }
 
-Type* Typer::Visitor::TypeStringCharAt(Node* node) { return Type::String(); }
+Type* Typer::Visitor::TypeStringToLowerCaseIntl(Node* node) {
+  return Type::String();
+}
 
-Type* Typer::Visitor::TypeStringToLowerCaseIntl(Node* node) { UNREACHABLE(); }
-
-Type* Typer::Visitor::TypeStringToUpperCaseIntl(Node* node) { UNREACHABLE(); }
+Type* Typer::Visitor::TypeStringToUpperCaseIntl(Node* node) {
+  return Type::String();
+}
 
 Type* Typer::Visitor::TypeStringCharCodeAt(Node* node) {
   return typer_->cache_.kUint16;
 }
 
-Type* Typer::Visitor::TypeSeqStringCharCodeAt(Node* node) {
-  return typer_->cache_.kUint16;
+Type* Typer::Visitor::TypeStringCodePointAt(Node* node) {
+  return Type::Range(0.0, String::kMaxCodePoint, zone());
 }
 
-Type* Typer::Visitor::TypeStringFromCharCode(Node* node) {
-  return TypeUnaryOp(node, StringFromCharCodeTyper);
+Type* Typer::Visitor::TypeStringFromSingleCharCode(Node* node) {
+  return TypeUnaryOp(node, StringFromSingleCharCodeTyper);
 }
 
-Type* Typer::Visitor::TypeStringFromCodePoint(Node* node) {
-  return TypeUnaryOp(node, StringFromCodePointTyper);
+Type* Typer::Visitor::TypeStringFromSingleCodePoint(Node* node) {
+  return TypeUnaryOp(node, StringFromSingleCodePointTyper);
 }
 
-Type* Typer::Visitor::TypeStringIndexOf(Node* node) { UNREACHABLE(); }
+Type* Typer::Visitor::TypeStringIndexOf(Node* node) {
+  return Type::Range(-1.0, String::kMaxLength, zone());
+}
+
+Type* Typer::Visitor::TypeStringLength(Node* node) {
+  return typer_->cache_.kStringLengthType;
+}
+
+Type* Typer::Visitor::TypeStringSubstring(Node* node) { return Type::String(); }
 
 Type* Typer::Visitor::TypeMaskIndexWithBound(Node* node) {
   return Type::Union(Operand(node, 0), typer_->cache_.kSingletonZero, zone());
@@ -2034,11 +2064,6 @@ Type* Typer::Visitor::TypeCheckSmi(Node* node) {
 Type* Typer::Visitor::TypeCheckString(Node* node) {
   Type* arg = Operand(node, 0);
   return Type::Intersect(arg, Type::String(), zone());
-}
-
-Type* Typer::Visitor::TypeCheckSeqString(Node* node) {
-  Type* arg = Operand(node, 0);
-  return Type::Intersect(arg, Type::SeqString(), zone());
 }
 
 Type* Typer::Visitor::TypeCheckSymbol(Node* node) {
@@ -2151,6 +2176,28 @@ Type* Typer::Visitor::TypeObjectIsMinusZero(Node* node) {
   return TypeUnaryOp(node, ObjectIsMinusZero);
 }
 
+Type* Typer::Visitor::TypeNumberIsFloat64Hole(Node* node) {
+  return Type::Boolean();
+}
+
+Type* Typer::Visitor::TypeNumberIsFinite(Node* node) { UNREACHABLE(); }
+
+Type* Typer::Visitor::TypeObjectIsFiniteNumber(Node* node) {
+  return Type::Boolean();
+}
+
+Type* Typer::Visitor::TypeNumberIsInteger(Node* node) { UNREACHABLE(); }
+
+Type* Typer::Visitor::TypeObjectIsSafeInteger(Node* node) {
+  return Type::Boolean();
+}
+
+Type* Typer::Visitor::TypeNumberIsSafeInteger(Node* node) { UNREACHABLE(); }
+
+Type* Typer::Visitor::TypeObjectIsInteger(Node* node) {
+  return Type::Boolean();
+}
+
 Type* Typer::Visitor::TypeObjectIsNaN(Node* node) {
   return TypeUnaryOp(node, ObjectIsNaN);
 }
@@ -2204,6 +2251,8 @@ Type* Typer::Visitor::TypeNewSmiOrObjectElements(Node* node) {
 Type* Typer::Visitor::TypeNewArgumentsElements(Node* node) {
   return Type::OtherInternal();
 }
+
+Type* Typer::Visitor::TypeNewConsString(Node* node) { return Type::String(); }
 
 Type* Typer::Visitor::TypeArrayBufferWasNeutered(Node* node) {
   return Type::Boolean();

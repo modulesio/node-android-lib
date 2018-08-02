@@ -97,6 +97,41 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kAVXFloat32Neg:
     case kIA32BitcastFI:
     case kIA32BitcastIF:
+    case kSSEF32x4Splat:
+    case kAVXF32x4Splat:
+    case kSSEF32x4ExtractLane:
+    case kAVXF32x4ExtractLane:
+    case kSSEF32x4ReplaceLane:
+    case kAVXF32x4ReplaceLane:
+    case kIA32F32x4SConvertI32x4:
+    case kSSEF32x4UConvertI32x4:
+    case kAVXF32x4UConvertI32x4:
+    case kSSEF32x4Abs:
+    case kAVXF32x4Abs:
+    case kSSEF32x4Neg:
+    case kAVXF32x4Neg:
+    case kIA32F32x4RecipApprox:
+    case kIA32F32x4RecipSqrtApprox:
+    case kSSEF32x4Add:
+    case kAVXF32x4Add:
+    case kSSEF32x4AddHoriz:
+    case kAVXF32x4AddHoriz:
+    case kSSEF32x4Sub:
+    case kAVXF32x4Sub:
+    case kSSEF32x4Mul:
+    case kAVXF32x4Mul:
+    case kSSEF32x4Min:
+    case kAVXF32x4Min:
+    case kSSEF32x4Max:
+    case kAVXF32x4Max:
+    case kSSEF32x4Eq:
+    case kAVXF32x4Eq:
+    case kSSEF32x4Ne:
+    case kAVXF32x4Ne:
+    case kSSEF32x4Lt:
+    case kAVXF32x4Lt:
+    case kSSEF32x4Le:
+    case kAVXF32x4Le:
     case kIA32I32x4Splat:
     case kIA32I32x4ExtractLane:
     case kSSEI32x4ReplaceLane:
@@ -108,6 +143,8 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kAVXI32x4ShrS:
     case kSSEI32x4Add:
     case kAVXI32x4Add:
+    case kSSEI32x4AddHoriz:
+    case kAVXI32x4AddHoriz:
     case kSSEI32x4Sub:
     case kAVXI32x4Sub:
     case kSSEI32x4Mul:
@@ -147,6 +184,8 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kAVXI16x8Add:
     case kSSEI16x8AddSaturateS:
     case kAVXI16x8AddSaturateS:
+    case kSSEI16x8AddHoriz:
+    case kAVXI16x8AddHoriz:
     case kSSEI16x8Sub:
     case kAVXI16x8Sub:
     case kSSEI16x8SubSaturateS:
@@ -184,6 +223,10 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kSSEI8x16ReplaceLane:
     case kAVXI8x16ReplaceLane:
     case kIA32I8x16Neg:
+    case kSSEI8x16Shl:
+    case kAVXI8x16Shl:
+    case kSSEI8x16ShrS:
+    case kAVXI8x16ShrS:
     case kSSEI8x16Add:
     case kAVXI8x16Add:
     case kSSEI8x16AddSaturateS:
@@ -192,6 +235,8 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kAVXI8x16Sub:
     case kSSEI8x16SubSaturateS:
     case kAVXI8x16SubSaturateS:
+    case kSSEI8x16Mul:
+    case kAVXI8x16Mul:
     case kSSEI8x16MinS:
     case kAVXI8x16MinS:
     case kSSEI8x16MaxS:
@@ -208,6 +253,8 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kAVXI8x16AddSaturateU:
     case kSSEI8x16SubSaturateU:
     case kAVXI8x16SubSaturateU:
+    case kSSEI8x16ShrU:
+    case kAVXI8x16ShrU:
     case kSSEI8x16MinU:
     case kAVXI8x16MinU:
     case kSSEI8x16MaxU:
@@ -216,6 +263,19 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kAVXI8x16GtU:
     case kSSEI8x16GeU:
     case kAVXI8x16GeU:
+    case kIA32S128Zero:
+    case kSSES128Not:
+    case kAVXS128Not:
+    case kSSES128And:
+    case kAVXS128And:
+    case kSSES128Or:
+    case kAVXS128Or:
+    case kSSES128Xor:
+    case kAVXS128Xor:
+    case kSSES128Select:
+    case kAVXS128Select:
+    case kIA32S8x16Shuffle:
+    case kIA32S32x4Swizzle:
       return (instr->addressing_mode() == kMode_None)
           ? kNoOpcodeFlags
           : kIsLoadOperation | kHasSideEffect;
@@ -235,16 +295,20 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kIA32Movl:
     case kIA32Movss:
     case kIA32Movsd:
+    case kIA32Movdqu:
       // Moves are used for memory load/store operations.
       return instr->HasOutput() ? kIsLoadOperation : kHasSideEffect;
 
     case kIA32StackCheck:
+    case kIA32Peek:
       return kIsLoadOperation;
 
     case kIA32Push:
     case kIA32PushFloat32:
     case kIA32PushFloat64:
+    case kIA32PushSimd128:
     case kIA32Poke:
+    case kLFence:
       return kHasSideEffect;
 
 #define CASE(Name) case k##Name:
@@ -262,18 +326,6 @@ int InstructionScheduler::GetInstructionLatency(const Instruction* instr) {
   // Basic latency modeling for ia32 instructions. They have been determined
   // in an empirical way.
   switch (instr->arch_opcode()) {
-    case kCheckedLoadInt8:
-    case kCheckedLoadUint8:
-    case kCheckedLoadInt16:
-    case kCheckedLoadUint16:
-    case kCheckedLoadWord32:
-    case kCheckedLoadFloat32:
-    case kCheckedLoadFloat64:
-    case kCheckedStoreWord8:
-    case kCheckedStoreWord16:
-    case kCheckedStoreWord32:
-    case kCheckedStoreFloat32:
-    case kCheckedStoreFloat64:
     case kSSEFloat64Mul:
       return 5;
     case kIA32Imul:

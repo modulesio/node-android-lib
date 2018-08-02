@@ -601,9 +601,6 @@ TEST(CallRuntime) {
 
       "function f() { return %Add(1, 2) }\n"
       "f();\n",
-
-      "function f() { return %spread_iterable([1]) }\n"
-      "f();\n",
   };
 
   CHECK(CompareTexts(BuildActual(printer, snippets),
@@ -2233,9 +2230,125 @@ TEST(ClassAndSuperClass) {
                      LoadGolden("ClassAndSuperClass.golden")));
 }
 
-TEST(ClassFields) {
+TEST(PublicClassFields) {
   bool old_flag = i::FLAG_harmony_public_fields;
   i::FLAG_harmony_public_fields = true;
+  InitializedIgnitionHandleScope scope;
+  BytecodeExpectationsPrinter printer(CcTest::isolate());
+
+  const char* snippets[] = {
+      "{\n"
+      "  class A {\n"
+      "    a;\n"
+      "    ['b'];\n"
+      "  }\n"
+      "\n"
+      "  class B {\n"
+      "    a = 1;\n"
+      "    ['b'] = this.a;\n"
+      "  }\n"
+      "  new A;\n"
+      "  new B;\n"
+      "}\n",
+
+      "{\n"
+      "  class A extends class {} {\n"
+      "    a;\n"
+      "    ['b'];\n"
+      "  }\n"
+      "\n"
+      "  class B extends class {} {\n"
+      "    a = 1;\n"
+      "    ['b'] = this.a;\n"
+      "    foo() { return 1; }\n"
+      "    constructor() {\n"
+      "      super();\n"
+      "    }\n"
+      "  }\n"
+      "\n"
+      "  class C extends B {\n"
+      "    a = 1;\n"
+      "    ['b'] = this.a;\n"
+      "    constructor() {\n"
+      "      (() => super())();\n"
+      "    }\n"
+      "  }\n"
+      "\n"
+      "  new A;\n"
+      "  new B;\n"
+      "  new C;\n"
+      "}\n"};
+
+  CHECK(CompareTexts(BuildActual(printer, snippets),
+                     LoadGolden("PublicClassFields.golden")));
+  i::FLAG_harmony_public_fields = old_flag;
+}
+
+TEST(PrivateClassFields) {
+  bool old_flag = i::FLAG_harmony_private_fields;
+  i::FLAG_harmony_private_fields = true;
+  InitializedIgnitionHandleScope scope;
+  BytecodeExpectationsPrinter printer(CcTest::isolate());
+
+  const char* snippets[] = {
+      "{\n"
+      "  class A {\n"
+      "    #a;\n"
+      "    constructor() {\n"
+      "      this.#a = 1;\n"
+      "    }\n"
+      "  }\n"
+      "\n"
+      "  class B {\n"
+      "    #a = 1;\n"
+      "  }\n"
+      "  new A;\n"
+      "  new B;\n"
+      "}\n",
+
+      "{\n"
+      "  class A extends class {} {\n"
+      "    #a;\n"
+      "    constructor() {\n"
+      "      super();\n"
+      "      this.#a = 1;\n"
+      "    }\n"
+      "  }\n"
+      "\n"
+      "  class B extends class {} {\n"
+      "    #a = 1;\n"
+      "    #b = this.#a;\n"
+      "    foo() { return this.#a; }\n"
+      "    bar(v) { this.#b = v; }\n"
+      "    constructor() {\n"
+      "      super();\n"
+      "      this.foo();\n"
+      "      this.bar(3);\n"
+      "    }\n"
+      "  }\n"
+      "\n"
+      "  class C extends B {\n"
+      "    #a = 2;\n"
+      "    constructor() {\n"
+      "      (() => super())();\n"
+      "    }\n"
+      "  }\n"
+      "\n"
+      "  new A;\n"
+      "  new B;\n"
+      "  new C;\n"
+      "};\n"};
+
+  CHECK(CompareTexts(BuildActual(printer, snippets),
+                     LoadGolden("PrivateClassFields.golden")));
+  i::FLAG_harmony_private_fields = old_flag;
+}
+
+TEST(StaticClassFields) {
+  bool old_flag = i::FLAG_harmony_public_fields;
+  bool old_static_flag = i::FLAG_harmony_static_fields;
+  i::FLAG_harmony_public_fields = true;
+  i::FLAG_harmony_static_fields = true;
   InitializedIgnitionHandleScope scope;
   BytecodeExpectationsPrinter printer(CcTest::isolate());
 
@@ -2293,8 +2406,9 @@ TEST(ClassFields) {
       "}\n"};
 
   CHECK(CompareTexts(BuildActual(printer, snippets),
-                     LoadGolden("ClassFields.golden")));
+                     LoadGolden("StaticClassFields.golden")));
   i::FLAG_harmony_public_fields = old_flag;
+  i::FLAG_harmony_static_fields = old_static_flag;
 }
 
 TEST(Generators) {
@@ -2323,8 +2437,6 @@ TEST(Generators) {
 }
 
 TEST(AsyncGenerators) {
-  bool old_flag = i::FLAG_harmony_async_iteration;
-  i::FLAG_harmony_async_iteration = true;
   InitializedIgnitionHandleScope scope;
   BytecodeExpectationsPrinter printer(CcTest::isolate());
   printer.set_wrap(false);
@@ -2347,7 +2459,6 @@ TEST(AsyncGenerators) {
 
   CHECK(CompareTexts(BuildActual(printer, snippets),
                      LoadGolden("AsyncGenerators.golden")));
-  i::FLAG_harmony_async_iteration = old_flag;
 }
 
 TEST(Modules) {
@@ -2465,8 +2576,6 @@ TEST(NewAndSpread) {
 }
 
 TEST(ForAwaitOf) {
-  bool old_flag = i::FLAG_harmony_async_iteration;
-  i::FLAG_harmony_async_iteration = true;
   InitializedIgnitionHandleScope scope;
   BytecodeExpectationsPrinter printer(CcTest::isolate());
   printer.set_wrap(false);
@@ -2499,8 +2608,6 @@ TEST(ForAwaitOf) {
 
   CHECK(CompareTexts(BuildActual(printer, snippets),
                      LoadGolden("ForAwaitOf.golden")));
-
-  i::FLAG_harmony_async_iteration = old_flag;
 }
 
 TEST(StandardForLoop) {
@@ -2638,6 +2745,41 @@ TEST(StringConcat) {
 
   CHECK(CompareTexts(BuildActual(printer, snippets),
                      LoadGolden("StringConcat.golden")));
+}
+
+TEST(TemplateLiterals) {
+  InitializedIgnitionHandleScope scope;
+  BytecodeExpectationsPrinter printer(CcTest::isolate());
+
+  const char* snippets[] = {
+      "var a = 1;\n"
+      "var b = 2;\n"
+      "return `${a}${b}string`;\n",
+
+      "var a = 1;\n"
+      "var b = 2;\n"
+      "return `string${a}${b}`;\n",
+
+      "var a = 1;\n"
+      "var b = 2;\n"
+      "return `${a}string${b}`;\n",
+
+      "var a = 1;\n"
+      "var b = 2;\n"
+      "return `foo${a}bar${b}baz${1}`;\n",
+
+      "var a = 1;\n"
+      "var b = 2;\n"
+      "return `${a}string` + `string${b}`;\n",
+
+      "var a = 1;\n"
+      "var b = 2;\n"
+      "function foo(a, b) { };\n"
+      "return `string${foo(a, b)}${a}${b}`;\n",
+  };
+
+  CHECK(CompareTexts(BuildActual(printer, snippets),
+                     LoadGolden("TemplateLiterals.golden")));
 }
 
 #undef XSTR

@@ -42,7 +42,7 @@ assert.strictEqual(externalResult[2], 2);
 const buffer = new ArrayBuffer(128);
 const arrayTypes = [ Int8Array, Uint8Array, Uint8ClampedArray, Int16Array,
                      Uint16Array, Int32Array, Uint32Array, Float32Array,
-                     Float64Array ];
+                     Float64Array, BigInt64Array, BigUint64Array ];
 
 arrayTypes.forEach((currentType) => {
   const template = Reflect.construct(currentType, buffer);
@@ -60,16 +60,17 @@ arrayTypes.forEach((currentType) => {
   const template = Reflect.construct(currentType, buffer);
   assert.throws(() => {
     test_typedarray.CreateTypedArray(template, buffer, 0, 136);
-  }, /Invalid typed array length/);
+  }, RangeError);
 });
 
 const nonByteArrayTypes = [ Int16Array, Uint16Array, Int32Array, Uint32Array,
-                            Float32Array, Float64Array ];
+                            Float32Array, Float64Array,
+                            BigInt64Array, BigUint64Array ];
 nonByteArrayTypes.forEach((currentType) => {
   const template = Reflect.construct(currentType, buffer);
   assert.throws(() => {
     test_typedarray.CreateTypedArray(template, buffer,
                                      currentType.BYTES_PER_ELEMENT + 1, 1);
     console.log(`start of offset ${currentType}`);
-  }, /start offset of/);
+  }, RangeError);
 });

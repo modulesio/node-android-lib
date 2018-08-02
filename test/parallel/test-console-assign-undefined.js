@@ -6,7 +6,7 @@
 const tmp = global.console;
 global.console = 42;
 
-const common = require('../common');
+require('../common');
 const assert = require('assert');
 
 // Originally the console had a getter. Test twice to verify it had no side
@@ -14,12 +14,9 @@ const assert = require('assert');
 assert.strictEqual(global.console, 42);
 assert.strictEqual(global.console, 42);
 
-common.expectsError(
+assert.throws(
   () => console.log('foo'),
-  {
-    type: TypeError,
-    message: 'console.log is not a function'
-  }
+  { name: 'TypeError' }
 );
 
 global.console = 1;

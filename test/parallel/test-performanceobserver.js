@@ -21,8 +21,8 @@ const {
 } = constants;
 
 assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_NODE], 0);
-assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_MARK], 1);
-assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_MEASURE], 1);
+assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_MARK], 0);
+assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_MEASURE], 0);
 assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_GC], 0);
 assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_FUNCTION], 0);
 
@@ -37,14 +37,14 @@ assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_FUNCTION], 0);
   });
   const observer = new PerformanceObserver(common.mustNotCall());
 
-  [1, null, undefined].forEach((i) => {
-    //observer.observe(i);
+  [1, null, undefined].forEach((input) => {
     common.expectsError(
-      () => observer.observe(i),
+      () => observer.observe(input),
       {
         code: 'ERR_INVALID_ARG_TYPE',
         type: TypeError,
-        message: 'The "options" argument must be of type Object'
+        message: 'The "options" argument must be of type Object. ' +
+                 `Received type ${typeof input}`
       });
   });
 
@@ -65,10 +65,10 @@ assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_FUNCTION], 0);
     new PerformanceObserver(common.mustCall(callback, 3));
 
   const countdown =
-    new Countdown(3, common.mustCall(() => {
+    new Countdown(3, () => {
       observer.disconnect();
-      assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_MARK], 1);
-    }));
+      assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_MARK], 0);
+    });
 
   function callback(list, obs) {
     assert.strictEqual(obs, observer);
@@ -76,9 +76,9 @@ assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_FUNCTION], 0);
     assert.strictEqual(entries.length, 1);
     countdown.dec();
   }
+  assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_MARK], 0);
+  observer.observe({ entryTypes: ['mark'] });
   assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_MARK], 1);
-  assert.doesNotThrow(() => observer.observe({ entryTypes: ['mark'] }));
-  assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_MARK], 2);
   performance.mark('test1');
   performance.mark('test2');
   performance.mark('test3');
@@ -89,14 +89,14 @@ assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_FUNCTION], 0);
 {
   const observer =
     new PerformanceObserver(common.mustCall(callback, 1));
-  assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_MARK], 1);
+  assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_MARK], 0);
 
   function callback(list, obs) {
     assert.strictEqual(obs, observer);
     const entries = list.getEntries();
     assert.strictEqual(entries.length, 3);
     observer.disconnect();
-    assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_MARK], 1);
+    assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_MARK], 0);
 
     {
       const entriesByName = list.getEntriesByName('test1');
@@ -125,15 +125,11 @@ assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_FUNCTION], 0);
     }
   }
 
-  assert.doesNotThrow(() => {
-    observer.observe({ entryTypes: ['mark', 'measure'], buffered: true });
-  });
+  observer.observe({ entryTypes: ['mark', 'measure'], buffered: true });
   // Do this twice to make sure it doesn't throw
-  assert.doesNotThrow(() => {
-    observer.observe({ entryTypes: ['mark', 'measure'], buffered: true });
-  });
+  observer.observe({ entryTypes: ['mark', 'measure'], buffered: true });
   // Even tho we called twice, count should be 1
-  assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_MARK], 2);
+  assert.strictEqual(counts[NODE_PERFORMANCE_ENTRY_TYPE_MARK], 1);
   performance.mark('test1');
   performance.mark('test2');
   performance.measure('test3', 'test1', 'test2');

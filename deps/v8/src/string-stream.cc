@@ -129,7 +129,7 @@ void StringStream::Add(Vector<const char> format, Vector<FmtElm> elms) {
       int value = current.data_.u_int_;
       if (0x20 <= value && value <= 0x7F) {
         Put(value);
-      } else if (value <= 0xff) {
+      } else if (value <= 0xFF) {
         Add("\\x%02x", value);
       } else {
         Add("\\u%04x", value);
@@ -481,7 +481,7 @@ void StringStream::PrintFunction(Object* f, Object* receiver, Code** code) {
 
 
 void StringStream::PrintPrototype(JSFunction* fun, Object* receiver) {
-  Object* name = fun->shared()->name();
+  Object* name = fun->shared()->Name();
   bool print_name = false;
   Isolate* isolate = fun->GetIsolate();
   if (receiver->IsNullOrUndefined(isolate) || receiver->IsTheHole(isolate) ||
@@ -516,7 +516,7 @@ void StringStream::PrintPrototype(JSFunction* fun, Object* receiver) {
   // which it was looked up.
   if (print_name) {
     Add("(aka ");
-    PrintName(fun->shared()->name());
+    PrintName(fun->shared()->Name());
     Put(')');
   }
 }

@@ -38,6 +38,7 @@ bool BinaryOperationHintToNumberOperationHint(
     case BinaryOperationHint::kAny:
     case BinaryOperationHint::kNone:
     case BinaryOperationHint::kString:
+    case BinaryOperationHint::kBigInt:
       break;
   }
   return false;
@@ -59,14 +60,12 @@ class JSSpeculativeBinopBuilder final {
         slot_(slot) {}
 
   BinaryOperationHint GetBinaryOperationHint() {
-    DCHECK_EQ(FeedbackSlotKind::kBinaryOp, feedback_vector()->GetKind(slot_));
-    BinaryOpICNexus nexus(feedback_vector(), slot_);
+    FeedbackNexus nexus(feedback_vector(), slot_);
     return nexus.GetBinaryOperationFeedback();
   }
 
   CompareOperationHint GetCompareOperationHint() {
-    DCHECK_EQ(FeedbackSlotKind::kCompareOp, feedback_vector()->GetKind(slot_));
-    CompareICNexus nexus(feedback_vector(), slot_);
+    FeedbackNexus nexus(feedback_vector(), slot_);
     return nexus.GetCompareOperationFeedback();
   }
 
@@ -90,6 +89,7 @@ class JSSpeculativeBinopBuilder final {
       case CompareOperationHint::kNone:
       case CompareOperationHint::kString:
       case CompareOperationHint::kSymbol:
+      case CompareOperationHint::kBigInt:
       case CompareOperationHint::kReceiver:
       case CompareOperationHint::kInternalizedString:
         break;
@@ -216,7 +216,7 @@ JSTypeHintLowering::LoweringResult JSTypeHintLowering::ReduceUnaryOperation(
     const Operator* op, Node* operand, Node* effect, Node* control,
     FeedbackSlot slot) const {
   DCHECK(!slot.IsInvalid());
-  BinaryOpICNexus nexus(feedback_vector(), slot);
+  FeedbackNexus nexus(feedback_vector(), slot);
   if (Node* node = TryBuildSoftDeopt(
           nexus, effect, control,
           DeoptimizeReason::kInsufficientTypeFeedbackForUnaryOperation)) {
@@ -280,7 +280,7 @@ JSTypeHintLowering::LoweringResult JSTypeHintLowering::ReduceBinaryOperation(
   switch (op->opcode()) {
     case IrOpcode::kJSStrictEqual: {
       DCHECK(!slot.IsInvalid());
-      CompareICNexus nexus(feedback_vector(), slot);
+      FeedbackNexus nexus(feedback_vector(), slot);
       if (Node* node = TryBuildSoftDeopt(
               nexus, effect, control,
               DeoptimizeReason::kInsufficientTypeFeedbackForCompareOperation)) {
@@ -296,7 +296,7 @@ JSTypeHintLowering::LoweringResult JSTypeHintLowering::ReduceBinaryOperation(
     case IrOpcode::kJSLessThanOrEqual:
     case IrOpcode::kJSGreaterThanOrEqual: {
       DCHECK(!slot.IsInvalid());
-      CompareICNexus nexus(feedback_vector(), slot);
+      FeedbackNexus nexus(feedback_vector(), slot);
       if (Node* node = TryBuildSoftDeopt(
               nexus, effect, control,
               DeoptimizeReason::kInsufficientTypeFeedbackForCompareOperation)) {
@@ -310,7 +310,7 @@ JSTypeHintLowering::LoweringResult JSTypeHintLowering::ReduceBinaryOperation(
     }
     case IrOpcode::kJSInstanceOf: {
       DCHECK(!slot.IsInvalid());
-      InstanceOfICNexus nexus(feedback_vector(), slot);
+      FeedbackNexus nexus(feedback_vector(), slot);
       if (Node* node = TryBuildSoftDeopt(
               nexus, effect, control,
               DeoptimizeReason::kInsufficientTypeFeedbackForCompareOperation)) {
@@ -332,7 +332,7 @@ JSTypeHintLowering::LoweringResult JSTypeHintLowering::ReduceBinaryOperation(
     case IrOpcode::kJSDivide:
     case IrOpcode::kJSModulus: {
       DCHECK(!slot.IsInvalid());
-      BinaryOpICNexus nexus(feedback_vector(), slot);
+      FeedbackNexus nexus(feedback_vector(), slot);
       if (Node* node = TryBuildSoftDeopt(
               nexus, effect, control,
               DeoptimizeReason::kInsufficientTypeFeedbackForBinaryOperation)) {
@@ -359,7 +359,7 @@ JSTypeHintLowering::LoweringResult JSTypeHintLowering::ReduceForInNextOperation(
     Node* receiver, Node* cache_array, Node* cache_type, Node* index,
     Node* effect, Node* control, FeedbackSlot slot) const {
   DCHECK(!slot.IsInvalid());
-  ForInICNexus nexus(feedback_vector(), slot);
+  FeedbackNexus nexus(feedback_vector(), slot);
   if (Node* node = TryBuildSoftDeopt(
           nexus, effect, control,
           DeoptimizeReason::kInsufficientTypeFeedbackForForIn)) {
@@ -373,7 +373,7 @@ JSTypeHintLowering::ReduceForInPrepareOperation(Node* enumerator, Node* effect,
                                                 Node* control,
                                                 FeedbackSlot slot) const {
   DCHECK(!slot.IsInvalid());
-  ForInICNexus nexus(feedback_vector(), slot);
+  FeedbackNexus nexus(feedback_vector(), slot);
   if (Node* node = TryBuildSoftDeopt(
           nexus, effect, control,
           DeoptimizeReason::kInsufficientTypeFeedbackForForIn)) {
@@ -385,13 +385,13 @@ JSTypeHintLowering::ReduceForInPrepareOperation(Node* enumerator, Node* effect,
 JSTypeHintLowering::LoweringResult JSTypeHintLowering::ReduceToNumberOperation(
     Node* input, Node* effect, Node* control, FeedbackSlot slot) const {
   DCHECK(!slot.IsInvalid());
-  BinaryOpICNexus nexus(feedback_vector(), slot);
+  FeedbackNexus nexus(feedback_vector(), slot);
   NumberOperationHint hint;
   if (BinaryOperationHintToNumberOperationHint(
           nexus.GetBinaryOperationFeedback(), &hint)) {
     Node* node = jsgraph()->graph()->NewNode(
-        jsgraph()->simplified()->SpeculativeToNumber(hint), input, effect,
-        control);
+        jsgraph()->simplified()->SpeculativeToNumber(hint, VectorSlotPair()),
+        input, effect, control);
     return LoweringResult::SideEffectFree(node, node, control);
   }
   return LoweringResult::NoChange();
@@ -403,7 +403,7 @@ JSTypeHintLowering::LoweringResult JSTypeHintLowering::ReduceCallOperation(
   DCHECK(op->opcode() == IrOpcode::kJSCall ||
          op->opcode() == IrOpcode::kJSCallWithSpread);
   DCHECK(!slot.IsInvalid());
-  CallICNexus nexus(feedback_vector(), slot);
+  FeedbackNexus nexus(feedback_vector(), slot);
   if (Node* node = TryBuildSoftDeopt(
           nexus, effect, control,
           DeoptimizeReason::kInsufficientTypeFeedbackForCall)) {
@@ -418,7 +418,7 @@ JSTypeHintLowering::LoweringResult JSTypeHintLowering::ReduceConstructOperation(
   DCHECK(op->opcode() == IrOpcode::kJSConstruct ||
          op->opcode() == IrOpcode::kJSConstructWithSpread);
   DCHECK(!slot.IsInvalid());
-  CallICNexus nexus(feedback_vector(), slot);
+  FeedbackNexus nexus(feedback_vector(), slot);
   if (Node* node = TryBuildSoftDeopt(
           nexus, effect, control,
           DeoptimizeReason::kInsufficientTypeFeedbackForConstruct)) {
@@ -432,7 +432,7 @@ JSTypeHintLowering::LoweringResult JSTypeHintLowering::ReduceLoadNamedOperation(
     FeedbackSlot slot) const {
   DCHECK_EQ(IrOpcode::kJSLoadNamed, op->opcode());
   DCHECK(!slot.IsInvalid());
-  LoadICNexus nexus(feedback_vector(), slot);
+  FeedbackNexus nexus(feedback_vector(), slot);
   if (Node* node = TryBuildSoftDeopt(
           nexus, effect, control,
           DeoptimizeReason::kInsufficientTypeFeedbackForGenericNamedAccess)) {
@@ -446,7 +446,7 @@ JSTypeHintLowering::LoweringResult JSTypeHintLowering::ReduceLoadKeyedOperation(
     FeedbackSlot slot) const {
   DCHECK_EQ(IrOpcode::kJSLoadProperty, op->opcode());
   DCHECK(!slot.IsInvalid());
-  KeyedLoadICNexus nexus(feedback_vector(), slot);
+  FeedbackNexus nexus(feedback_vector(), slot);
   if (Node* node = TryBuildSoftDeopt(
           nexus, effect, control,
           DeoptimizeReason::kInsufficientTypeFeedbackForGenericKeyedAccess)) {
@@ -463,7 +463,7 @@ JSTypeHintLowering::ReduceStoreNamedOperation(const Operator* op, Node* obj,
   DCHECK(op->opcode() == IrOpcode::kJSStoreNamed ||
          op->opcode() == IrOpcode::kJSStoreNamedOwn);
   DCHECK(!slot.IsInvalid());
-  StoreICNexus nexus(feedback_vector(), slot);
+  FeedbackNexus nexus(feedback_vector(), slot);
   if (Node* node = TryBuildSoftDeopt(
           nexus, effect, control,
           DeoptimizeReason::kInsufficientTypeFeedbackForGenericNamedAccess)) {
@@ -477,9 +477,10 @@ JSTypeHintLowering::ReduceStoreKeyedOperation(const Operator* op, Node* obj,
                                               Node* key, Node* val,
                                               Node* effect, Node* control,
                                               FeedbackSlot slot) const {
-  DCHECK_EQ(IrOpcode::kJSStoreProperty, op->opcode());
+  DCHECK(op->opcode() == IrOpcode::kJSStoreProperty ||
+         op->opcode() == IrOpcode::kJSStoreInArrayLiteral);
   DCHECK(!slot.IsInvalid());
-  KeyedStoreICNexus nexus(feedback_vector(), slot);
+  FeedbackNexus nexus(feedback_vector(), slot);
   if (Node* node = TryBuildSoftDeopt(
           nexus, effect, control,
           DeoptimizeReason::kInsufficientTypeFeedbackForGenericKeyedAccess)) {
@@ -493,7 +494,8 @@ Node* JSTypeHintLowering::TryBuildSoftDeopt(FeedbackNexus& nexus, Node* effect,
                                             DeoptimizeReason reason) const {
   if ((flags() & kBailoutOnUninitialized) && nexus.IsUninitialized()) {
     Node* deoptimize = jsgraph()->graph()->NewNode(
-        jsgraph()->common()->Deoptimize(DeoptimizeKind::kSoft, reason),
+        jsgraph()->common()->Deoptimize(DeoptimizeKind::kSoft, reason,
+                                        VectorSlotPair()),
         jsgraph()->Dead(), effect, control);
     Node* frame_state = NodeProperties::FindFrameStateBefore(deoptimize);
     deoptimize->ReplaceInput(0, frame_state);

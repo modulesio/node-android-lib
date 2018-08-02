@@ -4,7 +4,7 @@
 
 #include "src/regexp/regexp-utils.h"
 
-#include "src/factory.h"
+#include "src/heap/factory.h"
 #include "src/isolate.h"
 #include "src/objects-inl.h"
 #include "src/regexp/jsregexp.h"
@@ -134,7 +134,7 @@ bool RegExpUtils::IsUnmodifiedRegExp(Isolate* isolate, Handle<Object> obj) {
   // TODO(ishell): Update this check once map changes for constant field
   // tracking are landing.
 
-#if defined(DEBUG) || defined(ENABLE_SLOWFAST_SWITCH)
+#ifdef V8_ENABLE_FORCE_SLOW_PATH
   if (isolate->force_slow_path()) return false;
 #endif
 

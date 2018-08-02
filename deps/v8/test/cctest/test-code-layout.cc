@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/factory.h"
+#include "src/heap/factory.h"
 #include "src/isolate.h"
 #include "src/objects-inl.h"
 #include "test/cctest/cctest.h"
@@ -15,8 +15,8 @@ TEST(CodeLayoutWithoutUnwindingInfo) {
   HandleScope handle_scope(CcTest::i_isolate());
 
   // "Hello, World!" in ASCII.
-  byte buffer_array[13] = {0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x2c, 0x20,
-                           0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21};
+  byte buffer_array[13] = {0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x2C, 0x20,
+                           0x57, 0x6F, 0x72, 0x6C, 0x64, 0x21};
 
   byte* buffer = &buffer_array[0];
   int buffer_size = sizeof(buffer_array);
@@ -35,9 +35,9 @@ TEST(CodeLayoutWithoutUnwindingInfo) {
       code_desc, Code::STUB, Handle<Object>::null());
 
   CHECK(!code->has_unwinding_info());
-  CHECK_EQ(code->instruction_size(), buffer_size);
-  CHECK_EQ(0, memcmp(code->instruction_start(), buffer, buffer_size));
-  CHECK_EQ(code->instruction_end() - reinterpret_cast<byte*>(*code),
+  CHECK_EQ(code->raw_instruction_size(), buffer_size);
+  CHECK_EQ(0, memcmp(code->raw_instruction_start(), buffer, buffer_size));
+  CHECK_EQ(code->raw_instruction_end() - reinterpret_cast<byte*>(*code),
            Code::kHeaderSize + buffer_size - kHeapObjectTag);
 }
 
@@ -46,11 +46,11 @@ TEST(CodeLayoutWithUnwindingInfo) {
   HandleScope handle_scope(CcTest::i_isolate());
 
   // "Hello, World!" in ASCII.
-  byte buffer_array[13] = {0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x2c, 0x20,
-                           0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21};
+  byte buffer_array[13] = {0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x2C, 0x20,
+                           0x57, 0x6F, 0x72, 0x6C, 0x64, 0x21};
 
   // "JavaScript" in ASCII.
-  byte unwinding_info_array[10] = {0x4a, 0x61, 0x76, 0x61, 0x53,
+  byte unwinding_info_array[10] = {0x4A, 0x61, 0x76, 0x61, 0x53,
                                    0x63, 0x72, 0x69, 0x70, 0x74};
 
   byte* buffer = &buffer_array[0];
@@ -72,8 +72,8 @@ TEST(CodeLayoutWithUnwindingInfo) {
       code_desc, Code::STUB, Handle<Object>::null());
 
   CHECK(code->has_unwinding_info());
-  CHECK_EQ(code->instruction_size(), buffer_size);
-  CHECK_EQ(0, memcmp(code->instruction_start(), buffer, buffer_size));
+  CHECK_EQ(code->raw_instruction_size(), buffer_size);
+  CHECK_EQ(0, memcmp(code->raw_instruction_start(), buffer, buffer_size));
   CHECK(IsAligned(code->GetUnwindingInfoSizeOffset(), 8));
   CHECK_EQ(code->unwinding_info_size(), unwinding_info_size);
   CHECK(

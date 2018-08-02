@@ -155,37 +155,35 @@ bool RelocInfo::IsCodedSpecially() {
 
 
 bool RelocInfo::IsInConstantPool() {
-  if (FLAG_enable_embedded_constant_pool && host_ != nullptr) {
-    Address constant_pool = host_->constant_pool();
-    return (constant_pool && Assembler::IsConstantPoolLoadStart(pc_));
+  if (FLAG_enable_embedded_constant_pool && constant_pool_ != nullptr) {
+    return (constant_pool_ && Assembler::IsConstantPoolLoadStart(pc_));
   }
   return false;
 }
 
 Address RelocInfo::embedded_address() const {
-  return Assembler::target_address_at(pc_, host_);
+  return Assembler::target_address_at(pc_, constant_pool_);
 }
 
 uint32_t RelocInfo::embedded_size() const {
-  return static_cast<uint32_t>(
-     reinterpret_cast<intptr_t>(Assembler::target_address_at(pc_, host_)));
+  return static_cast<uint32_t>(reinterpret_cast<intptr_t>(
+      Assembler::target_address_at(pc_, constant_pool_)));
 }
 
-void RelocInfo::set_embedded_address(Isolate* isolate, Address address,
+void RelocInfo::set_embedded_address(Address address,
                                      ICacheFlushMode flush_mode) {
-  Assembler::set_target_address_at(isolate, pc_, host_, address, flush_mode);
+  Assembler::set_target_address_at(pc_, constant_pool_, address, flush_mode);
 }
 
-void RelocInfo::set_embedded_size(Isolate* isolate, uint32_t size,
-                                  ICacheFlushMode flush_mode) {
-  Assembler::set_target_address_at(isolate, pc_, host_,
+void RelocInfo::set_embedded_size(uint32_t size, ICacheFlushMode flush_mode) {
+  Assembler::set_target_address_at(pc_, constant_pool_,
                                    reinterpret_cast<Address>(size), flush_mode);
 }
 
-void RelocInfo::set_js_to_wasm_address(Isolate* isolate, Address address,
+void RelocInfo::set_js_to_wasm_address(Address address,
                                        ICacheFlushMode icache_flush_mode) {
   DCHECK_EQ(rmode_, JS_TO_WASM_CALL);
-  set_embedded_address(isolate, address, icache_flush_mode);
+  set_embedded_address(address, icache_flush_mode);
 }
 
 Address RelocInfo::js_to_wasm_address() const {
@@ -240,7 +238,7 @@ void Assembler::AllocateAndInstallRequestedHeapObjects(Isolate* isolate) {
     }
     Address pc = buffer_ + request.offset();
     Address constant_pool = nullptr;
-    set_target_address_at(nullptr, pc, constant_pool,
+    set_target_address_at(pc, constant_pool,
                           reinterpret_cast<Address>(object.location()),
                           SKIP_ICACHE_FLUSH);
   }
@@ -350,9 +348,9 @@ bool Assembler::Is64BitLoadIntoR12(Instr instr1, Instr instr2, Instr instr3,
   // 798c07c6       rldicr  r12, r12, 32, 31
   // 658c00c3       oris    r12, r12, 195
   // 618ccd40       ori     r12, r12, 52544
-  return (((instr1 >> 16) == 0x3d80) && ((instr2 >> 16) == 0x618c) &&
-          (instr3 == 0x798c07c6) && ((instr4 >> 16) == 0x658c) &&
-          ((instr5 >> 16) == 0x618c));
+  return (((instr1 >> 16) == 0x3D80) && ((instr2 >> 16) == 0x618C) &&
+          (instr3 == 0x798C07C6) && ((instr4 >> 16) == 0x658C) &&
+          ((instr5 >> 16) == 0x618C));
 }
 #else
 // This code assumes a FIXED_SEQUENCE for 32bit loads (lis/ori)
@@ -360,7 +358,7 @@ bool Assembler::Is32BitLoadIntoR12(Instr instr1, Instr instr2) {
   // Check the instruction is indeed a two part load (into r12)
   // 3d802553       lis     r12, 9555
   // 618c5000       ori   r12, r12, 20480
-  return (((instr1 >> 16) == 0x3d80) && ((instr2 >> 16) == 0x618c));
+  return (((instr1 >> 16) == 0x3D80) && ((instr2 >> 16) == 0x618C));
 }
 #endif
 
@@ -429,10 +427,10 @@ const int kEndOfChain = -4;
 enum {
   kUnboundMovLabelOffsetOpcode = 0 << 26,
   kUnboundAddLabelOffsetOpcode = 1 << 26,
-  kUnboundMovLabelAddrOpcode = 2 << 26,
-  kUnboundJumpTableEntryOpcode = 3 << 26
+  kUnboundAddLabelLongOffsetOpcode = 2 << 26,
+  kUnboundMovLabelAddrOpcode = 3 << 26,
+  kUnboundJumpTableEntryOpcode = 4 << 26
 };
-
 
 int Assembler::target_at(int pos) {
   Instr instr = instr_at(pos);
@@ -450,6 +448,7 @@ int Assembler::target_at(int pos) {
       break;
     case kUnboundMovLabelOffsetOpcode:
     case kUnboundAddLabelOffsetOpcode:
+    case kUnboundAddLabelLongOffsetOpcode:
     case kUnboundMovLabelAddrOpcode:
     case kUnboundJumpTableEntryOpcode:
       link = SIGN_EXT_IMM26(instr & kImm26Mask);
@@ -510,15 +509,21 @@ void Assembler::target_at_put(int pos, int target_pos, bool* is_branch) {
       patcher.bitwise_mov32(dst, offset);
       break;
     }
+    case kUnboundAddLabelLongOffsetOpcode:
     case kUnboundAddLabelOffsetOpcode: {
       // dst = base + position + immediate
       Instr operands = instr_at(pos + kInstrSize);
-      Register dst = Register::from_code((operands >> 21) & 0x1f);
-      Register base = Register::from_code((operands >> 16) & 0x1f);
-      int32_t offset = target_pos + SIGN_EXT_IMM16(operands & kImm16Mask);
-      PatchingAssembler patcher(isolate_data(),
-                                reinterpret_cast<byte*>(buffer_ + pos), 2);
+      Register dst = Register::from_code((operands >> 27) & 0x1F);
+      Register base = Register::from_code((operands >> 22) & 0x1F);
+      int32_t delta = (opcode == kUnboundAddLabelLongOffsetOpcode)
+                          ? static_cast<int32_t>(instr_at(pos + 2 * kInstrSize))
+                          : (SIGN_EXT_IMM22(operands & kImm22Mask));
+      int32_t offset = target_pos + delta;
+      PatchingAssembler patcher(
+          isolate_data(), reinterpret_cast<byte*>(buffer_ + pos),
+          2 + static_cast<int32_t>(opcode == kUnboundAddLabelLongOffsetOpcode));
       patcher.bitwise_add32(dst, base, offset);
+      if (opcode == kUnboundAddLabelLongOffsetOpcode) patcher.nop();
       break;
     }
     case kUnboundMovLabelAddrOpcode: {
@@ -660,9 +665,9 @@ void Assembler::xo_form(Instr instr, Register rt, Register ra, Register rb,
 
 void Assembler::md_form(Instr instr, Register ra, Register rs, int shift,
                         int maskbit, RCBit r) {
-  int sh0_4 = shift & 0x1f;
+  int sh0_4 = shift & 0x1F;
   int sh5 = (shift >> 5) & 0x1;
-  int m0_4 = maskbit & 0x1f;
+  int m0_4 = maskbit & 0x1F;
   int m5 = (maskbit >> 5) & 0x1;
 
   emit(instr | rs.code() * B21 | ra.code() * B16 | sh0_4 * B11 | m0_4 * B6 |
@@ -672,7 +677,7 @@ void Assembler::md_form(Instr instr, Register ra, Register rs, int shift,
 
 void Assembler::mds_form(Instr instr, Register ra, Register rs, Register rb,
                          int maskbit, RCBit r) {
-  int m0_4 = maskbit & 0x1f;
+  int m0_4 = maskbit & 0x1F;
   int m5 = (maskbit >> 5) & 0x1;
 
   emit(instr | rs.code() * B21 | ra.code() * B16 | rb.code() * B11 | m0_4 * B6 |
@@ -766,9 +771,9 @@ void Assembler::xoris(Register ra, Register rs, const Operand& imm) {
 
 void Assembler::rlwinm(Register ra, Register rs, int sh, int mb, int me,
                        RCBit rc) {
-  sh &= 0x1f;
-  mb &= 0x1f;
-  me &= 0x1f;
+  sh &= 0x1F;
+  mb &= 0x1F;
+  me &= 0x1F;
   emit(RLWINMX | rs.code() * B21 | ra.code() * B16 | sh * B11 | mb * B6 |
        me << 1 | rc);
 }
@@ -776,8 +781,8 @@ void Assembler::rlwinm(Register ra, Register rs, int sh, int mb, int me,
 
 void Assembler::rlwnm(Register ra, Register rs, Register rb, int mb, int me,
                       RCBit rc) {
-  mb &= 0x1f;
-  me &= 0x1f;
+  mb &= 0x1F;
+  me &= 0x1F;
   emit(RLWNMX | rs.code() * B21 | ra.code() * B16 | rb.code() * B11 | mb * B6 |
        me << 1 | rc);
 }
@@ -785,9 +790,9 @@ void Assembler::rlwnm(Register ra, Register rs, Register rb, int mb, int me,
 
 void Assembler::rlwimi(Register ra, Register rs, int sh, int mb, int me,
                        RCBit rc) {
-  sh &= 0x1f;
-  mb &= 0x1f;
-  me &= 0x1f;
+  sh &= 0x1F;
+  mb &= 0x1F;
+  me &= 0x1F;
   emit(RLWIMIX | rs.code() * B21 | ra.code() * B16 | sh * B11 | mb * B6 |
        me << 1 | rc);
 }
@@ -1191,7 +1196,7 @@ void Assembler::rldimi(Register ra, Register rs, int sh, int mb, RCBit r) {
 
 
 void Assembler::sradi(Register ra, Register rs, int sh, RCBit r) {
-  int sh0_4 = sh & 0x1f;
+  int sh0_4 = sh & 0x1F;
   int sh5 = (sh >> 5) & 0x1;
 
   emit(EXT2 | SRADIX | rs.code() * B21 | ra.code() * B16 | sh0_4 * B11 |
@@ -1368,19 +1373,19 @@ void Assembler::mov(Register dst, const Operand& src) {
           li(dst, Operand(value >> 32));
         } else {
           lis(dst, Operand(value >> 48));
-          u16 = ((value >> 32) & 0xffff);
+          u16 = ((value >> 32) & 0xFFFF);
           if (u16) {
             ori(dst, dst, Operand(u16));
           }
         }
         sldi(dst, dst, Operand(32));
-        u16 = ((value >> 16) & 0xffff);
+        u16 = ((value >> 16) & 0xFFFF);
         if (u16) {
           oris(dst, dst, Operand(u16));
         }
       }
 #endif
-      u16 = (value & 0xffff);
+      u16 = (value & 0xFFFF);
       if (u16) {
         ori(dst, dst, Operand(u16));
       }
@@ -1402,17 +1407,17 @@ void Assembler::bitwise_mov(Register dst, intptr_t value) {
     int32_t hi_32 = static_cast<int32_t>(value >> 32);
     int32_t lo_32 = static_cast<int32_t>(value);
     int hi_word = static_cast<int>(hi_32 >> 16);
-    int lo_word = static_cast<int>(hi_32 & 0xffff);
+    int lo_word = static_cast<int>(hi_32 & 0xFFFF);
     lis(dst, Operand(SIGN_EXT_IMM16(hi_word)));
     ori(dst, dst, Operand(lo_word));
     sldi(dst, dst, Operand(32));
-    hi_word = static_cast<int>(((lo_32 >> 16) & 0xffff));
-    lo_word = static_cast<int>(lo_32 & 0xffff);
+    hi_word = static_cast<int>(((lo_32 >> 16) & 0xFFFF));
+    lo_word = static_cast<int>(lo_32 & 0xFFFF);
     oris(dst, dst, Operand(hi_word));
     ori(dst, dst, Operand(lo_word));
 #else
     int hi_word = static_cast<int>(value >> 16);
-    int lo_word = static_cast<int>(value & 0xffff);
+    int lo_word = static_cast<int>(value & 0xFFFF);
     lis(dst, Operand(SIGN_EXT_IMM16(hi_word)));
     ori(dst, dst, Operand(lo_word));
 #endif
@@ -1422,7 +1427,7 @@ void Assembler::bitwise_mov(Register dst, intptr_t value) {
 void Assembler::bitwise_mov32(Register dst, int32_t value) {
   BlockTrampolinePoolScope block_trampoline_pool(this);
   int hi_word = static_cast<int>(value >> 16);
-  int lo_word = static_cast<int>(value & 0xffff);
+  int lo_word = static_cast<int>(value & 0xFFFF);
   lis(dst, Operand(SIGN_EXT_IMM16(hi_word)));
   ori(dst, dst, Operand(lo_word));
 }
@@ -1435,7 +1440,7 @@ void Assembler::bitwise_add32(Register dst, Register src, int32_t value) {
     nop();
   } else {
     int hi_word = static_cast<int>(value >> 16);
-    int lo_word = static_cast<int>(value & 0xffff);
+    int lo_word = static_cast<int>(value & 0xFFFF);
     if (lo_word & 0x8000) hi_word++;
     addis(dst, src, Operand(SIGN_EXT_IMM16(hi_word)));
     addic(dst, dst, Operand(SIGN_EXT_IMM16(lo_word)));
@@ -1485,11 +1490,16 @@ void Assembler::add_label_offset(Register dst, Register base, Label* label,
     DCHECK_EQ(0, link & 3);
     link >>= 2;
     DCHECK(is_int26(link));
-    DCHECK(is_int16(delta));
-
     BlockTrampolinePoolScope block_trampoline_pool(this);
-    emit(kUnboundAddLabelOffsetOpcode | (link & kImm26Mask));
-    emit(dst.code() * B21 | base.code() * B16 | (delta & kImm16Mask));
+
+    emit((is_int22(delta) ? kUnboundAddLabelOffsetOpcode
+                          : kUnboundAddLabelLongOffsetOpcode) |
+         (link & kImm26Mask));
+    emit(dst.code() * B27 | base.code() * B22 | (delta & kImm22Mask));
+
+    if (!is_int22(delta)) {
+      emit(delta);
+    }
   }
 }
 
@@ -1636,9 +1646,7 @@ void Assembler::stop(const char* msg, Condition cond, int32_t code,
   }
 }
 
-
-void Assembler::bkpt(uint32_t imm16) { emit(0x7d821008); }
-
+void Assembler::bkpt(uint32_t imm16) { emit(0x7D821008); }
 
 void Assembler::dcbf(Register ra, Register rb) {
   emit(EXT2 | DCBF | ra.code() * B16 | rb.code() * B11);
@@ -2006,7 +2014,7 @@ void Assembler::GrowBuffer(int needed) {
   // Some internal data structures overflow for very large buffers,
   // they must ensure that kMaximalBufferSize is not too large.
   if (desc.buffer_size > kMaximalBufferSize) {
-    V8::FatalProcessOutOfMemory("Assembler::GrowBuffer");
+    V8::FatalProcessOutOfMemory(nullptr, "Assembler::GrowBuffer");
   }
 
   // Set up new buffer.
@@ -2085,8 +2093,7 @@ void Assembler::EmitRelocations() {
        it != relocations_.end(); it++) {
     RelocInfo::Mode rmode = it->rmode();
     Address pc = buffer_ + it->position();
-    Code* code = nullptr;
-    RelocInfo rinfo(pc, rmode, it->data(), code);
+    RelocInfo rinfo(pc, rmode, it->data(), nullptr);
 
     // Fix up internal references now that they are guaranteed to be bound.
     if (RelocInfo::IsInternalReference(rmode)) {
@@ -2095,9 +2102,8 @@ void Assembler::EmitRelocations() {
       Memory::Address_at(pc) = buffer_ + pos;
     } else if (RelocInfo::IsInternalReferenceEncoded(rmode)) {
       // mov sequence
-      intptr_t pos = reinterpret_cast<intptr_t>(target_address_at(pc, code));
-      set_target_address_at(nullptr, pc, code, buffer_ + pos,
-                            SKIP_ICACHE_FLUSH);
+      intptr_t pos = reinterpret_cast<intptr_t>(target_address_at(pc, nullptr));
+      set_target_address_at(pc, nullptr, buffer_ + pos, SKIP_ICACHE_FLUSH);
     }
 
     reloc_info_writer.Write(&rinfo);
@@ -2151,10 +2157,6 @@ PatchingAssembler::~PatchingAssembler() {
   // Check that the code was patched as expected.
   DCHECK_EQ(pc_, buffer_ + buffer_size_ - kGap);
   DCHECK_EQ(reloc_info_writer.pos(), buffer_ + buffer_size_);
-}
-
-void PatchingAssembler::FlushICache(Isolate* isolate) {
-  Assembler::FlushICache(isolate, buffer_, buffer_size_ - kGap);
 }
 
 }  // namespace internal

@@ -207,7 +207,7 @@ class Scanner {
   static const int kNoOctalLocation = -1;
   static const uc32 kEndOfInput = Utf16CharacterStream::kEndOfInput;
 
-  explicit Scanner(UnicodeCache* scanner_contants, int* use_counts_);
+  explicit Scanner(UnicodeCache* scanner_contants);
 
   void Initialize(Utf16CharacterStream* source, bool is_module);
 
@@ -360,6 +360,18 @@ class Scanner {
 
   bool allow_harmony_bigint() const { return allow_harmony_bigint_; }
   void set_allow_harmony_bigint(bool allow) { allow_harmony_bigint_ = allow; }
+  bool allow_harmony_private_fields() const {
+    return allow_harmony_private_fields_;
+  }
+  void set_allow_harmony_private_fields(bool allow) {
+    allow_harmony_private_fields_ = allow;
+  }
+  bool allow_harmony_numeric_separator() const {
+    return allow_harmony_numeric_separator_;
+  }
+  void set_allow_harmony_numeric_separator(bool allow) {
+    allow_harmony_numeric_separator_ = allow;
+  }
 
  private:
   // Scoped helper for saving & restoring scanner error state.
@@ -484,12 +496,21 @@ class Scanner {
     Token::Value contextual_token;
   };
 
+  enum NumberKind {
+    BINARY,
+    OCTAL,
+    IMPLICIT_OCTAL,
+    HEX,
+    DECIMAL,
+    DECIMAL_WITH_LEADING_ZERO
+  };
+
   static const int kCharacterLookaheadBufferSize = 1;
   const int kMaxAscii = 127;
 
   // Scans octal escape sequence. Also accepts "\0" decimal escape sequence.
   template <bool capture_raw>
-  uc32 ScanOctalEscape(uc32 c, int length);
+  uc32 ScanOctalEscape(uc32 c, int length, bool in_template_literal);
 
   // Call this after setting source_ to the input.
   void Init() {
@@ -714,12 +735,25 @@ class Scanner {
   // Scans a possible HTML comment -- begins with '<!'.
   Token::Value ScanHtmlComment();
 
-  void ScanDecimalDigits();
+  bool ScanDigitsWithNumericSeparators(bool (*predicate)(uc32 ch),
+                                       bool is_check_first_digit);
+  bool ScanDecimalDigits();
+  // Optimized function to scan decimal number as Smi.
+  bool ScanDecimalAsSmi(uint64_t* value);
+  bool ScanDecimalAsSmiWithNumericSeparators(uint64_t* value);
+  bool ScanHexDigits();
+  bool ScanBinaryDigits();
+  bool ScanSignedInteger();
+  bool ScanOctalDigits();
+  bool ScanImplicitOctalDigits(int start_pos, NumberKind* kind);
+
   Token::Value ScanNumber(bool seen_period);
   Token::Value ScanIdentifierOrKeyword();
+  Token::Value ScanIdentifierOrKeywordInner(LiteralScope* literal);
   Token::Value ScanIdentifierSuffix(LiteralScope* literal, bool escaped);
 
   Token::Value ScanString();
+  Token::Value ScanPrivateName();
 
   // Scans an escape-sequence which is part of a string and adds the
   // decoded character to the current literal. Returns true if a pattern
@@ -735,8 +769,6 @@ class Scanner {
   uc32 ScanUnicodeEscape();
 
   bool is_module_;
-
-  bool IsLineTerminator(uc32 c);
 
   Token::Value ScanTemplateSpan();
 
@@ -802,10 +834,10 @@ class Scanner {
   // Whether this scanner encountered an HTML comment.
   bool found_html_comment_;
 
-  // Whether to recognize BIGINT tokens.
+  // Harmony flags to allow ESNext features.
   bool allow_harmony_bigint_;
-
-  int* use_counts_;
+  bool allow_harmony_private_fields_;
+  bool allow_harmony_numeric_separator_;
 
   MessageTemplate::Template scanner_error_;
   Location scanner_error_location_;

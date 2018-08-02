@@ -35,7 +35,7 @@ void StackGuard::reset_limits(const ExecutionAccess& lock) {
 
 
 static void PrintDeserializedCodeInfo(Handle<JSFunction> function) {
-  if (function->code() == function->shared()->code() &&
+  if (function->code() == function->shared()->GetCode() &&
       function->shared()->deserialized()) {
     PrintF("[Running deserialized script");
     Object* script = function->shared()->script();
@@ -52,10 +52,11 @@ static void PrintDeserializedCodeInfo(Handle<JSFunction> function) {
 
 namespace {
 
-MUST_USE_RESULT MaybeHandle<Object> Invoke(
+V8_WARN_UNUSED_RESULT MaybeHandle<Object> Invoke(
     Isolate* isolate, bool is_construct, Handle<Object> target,
     Handle<Object> receiver, int argc, Handle<Object> args[],
-    Handle<Object> new_target, Execution::MessageHandling message_handling) {
+    Handle<Object> new_target, Execution::MessageHandling message_handling,
+    Execution::Target execution_target) {
   DCHECK(!receiver->IsJSGlobalObject());
 
 #ifdef USE_SIMULATOR
@@ -73,11 +74,13 @@ MUST_USE_RESULT MaybeHandle<Object> Invoke(
   }
 #endif
 
-  // api callbacks can be called directly.
+  // api callbacks can be called directly, unless we want to take the detour
+  // through JS to set up a frame for break-at-entry.
   if (target->IsJSFunction()) {
     Handle<JSFunction> function = Handle<JSFunction>::cast(target);
     if ((!is_construct || function->IsConstructor()) &&
-        function->shared()->IsApiFunction()) {
+        function->shared()->IsApiFunction() &&
+        !function->shared()->BreakAtEntry()) {
       SaveContext save(isolate);
       isolate->set_context(function->context());
       DCHECK(function->context()->global_object()->IsJSGlobalObject());
@@ -113,20 +116,30 @@ MUST_USE_RESULT MaybeHandle<Object> Invoke(
   // Placeholder for return value.
   Object* value = nullptr;
 
-  typedef Object* (*JSEntryFunction)(Object* new_target, Object* target,
-                                     Object* receiver, int argc,
-                                     Object*** args);
+  using JSEntryFunction =
+      GeneratedCode<Object*(Object * new_target, Object * target,
+                            Object * receiver, int argc, Object*** args)>;
 
-  Handle<Code> code = is_construct
-      ? isolate->factory()->js_construct_entry_code()
-      : isolate->factory()->js_entry_code();
+  Handle<Code> code;
+  switch (execution_target) {
+    case Execution::Target::kCallable:
+      code = is_construct ? isolate->factory()->js_construct_entry_code()
+                          : isolate->factory()->js_entry_code();
+      break;
+    case Execution::Target::kRunMicrotasks:
+      code = isolate->factory()->js_run_microtasks_entry_code();
+      break;
+    default:
+      UNREACHABLE();
+  }
 
   {
     // Save and restore context around invocation and block the
     // allocation of handles without explicit handle scopes.
     SaveContext save(isolate);
     SealHandleScope shs(isolate);
-    JSEntryFunction stub_entry = FUNCTION_CAST<JSEntryFunction>(code->entry());
+    JSEntryFunction stub_entry =
+        JSEntryFunction::FromAddress(isolate, code->entry());
 
     if (FLAG_clear_exceptions_on_js_entry) isolate->clear_pending_exception();
 
@@ -138,9 +151,8 @@ MUST_USE_RESULT MaybeHandle<Object> Invoke(
     if (FLAG_profile_deserialization && target->IsJSFunction()) {
       PrintDeserializedCodeInfo(Handle<JSFunction>::cast(target));
     }
-    RuntimeCallTimerScope timer(isolate, &RuntimeCallStats::JS_Execution);
-    value = CALL_GENERATED_CODE(isolate, stub_entry, orig_func, func, recv,
-                                argc, argv);
+    RuntimeCallTimerScope timer(isolate, RuntimeCallCounterId::kJS_Execution);
+    value = stub_entry.Call(orig_func, func, recv, argc, argv);
   }
 
 #ifdef VERIFY_HEAP
@@ -167,7 +179,8 @@ MUST_USE_RESULT MaybeHandle<Object> Invoke(
 MaybeHandle<Object> CallInternal(Isolate* isolate, Handle<Object> callable,
                                  Handle<Object> receiver, int argc,
                                  Handle<Object> argv[],
-                                 Execution::MessageHandling message_handling) {
+                                 Execution::MessageHandling message_handling,
+                                 Execution::Target target) {
   // Convert calls on global objects to be calls on the global
   // receiver instead to avoid having a 'this' pointer which refers
   // directly to a global object.
@@ -176,7 +189,8 @@ MaybeHandle<Object> CallInternal(Isolate* isolate, Handle<Object> callable,
         handle(Handle<JSGlobalObject>::cast(receiver)->global_proxy(), isolate);
   }
   return Invoke(isolate, false, callable, receiver, argc, argv,
-                isolate->factory()->undefined_value(), message_handling);
+                isolate->factory()->undefined_value(), message_handling,
+                target);
 }
 
 }  // namespace
@@ -186,7 +200,7 @@ MaybeHandle<Object> Execution::Call(Isolate* isolate, Handle<Object> callable,
                                     Handle<Object> receiver, int argc,
                                     Handle<Object> argv[]) {
   return CallInternal(isolate, callable, receiver, argc, argv,
-                      MessageHandling::kReport);
+                      MessageHandling::kReport, Execution::Target::kCallable);
 }
 
 
@@ -203,15 +217,13 @@ MaybeHandle<Object> Execution::New(Isolate* isolate, Handle<Object> constructor,
                                    Handle<Object> argv[]) {
   return Invoke(isolate, true, constructor,
                 isolate->factory()->undefined_value(), argc, argv, new_target,
-                MessageHandling::kReport);
+                MessageHandling::kReport, Execution::Target::kCallable);
 }
 
-MaybeHandle<Object> Execution::TryCall(Isolate* isolate,
-                                       Handle<Object> callable,
-                                       Handle<Object> receiver, int argc,
-                                       Handle<Object> args[],
-                                       MessageHandling message_handling,
-                                       MaybeHandle<Object>* exception_out) {
+MaybeHandle<Object> Execution::TryCall(
+    Isolate* isolate, Handle<Object> callable, Handle<Object> receiver,
+    int argc, Handle<Object> args[], MessageHandling message_handling,
+    MaybeHandle<Object>* exception_out, Target target) {
   bool is_termination = false;
   MaybeHandle<Object> maybe_result;
   if (exception_out != nullptr) *exception_out = MaybeHandle<Object>();
@@ -226,8 +238,8 @@ MaybeHandle<Object> Execution::TryCall(Isolate* isolate,
     catcher.SetVerbose(false);
     catcher.SetCaptureMessage(false);
 
-    maybe_result =
-        CallInternal(isolate, callable, receiver, argc, args, message_handling);
+    maybe_result = CallInternal(isolate, callable, receiver, argc, args,
+                                message_handling, target);
 
     if (maybe_result.is_null()) {
       DCHECK(isolate->has_pending_exception());
@@ -253,6 +265,13 @@ MaybeHandle<Object> Execution::TryCall(Isolate* isolate,
   return maybe_result;
 }
 
+MaybeHandle<Object> Execution::RunMicrotasks(
+    Isolate* isolate, MessageHandling message_handling,
+    MaybeHandle<Object>* exception_out) {
+  auto undefined = isolate->factory()->undefined_value();
+  return TryCall(isolate, undefined, undefined, 0, {}, message_handling,
+                 exception_out, Target::kRunMicrotasks);
+}
 
 void StackGuard::SetStackLimit(uintptr_t limit) {
   ExecutionAccess access(isolate_);

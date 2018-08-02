@@ -4,6 +4,7 @@
 
 #include "src/heap/array-buffer-collector.h"
 
+#include "src/base/template-utils.h"
 #include "src/heap/array-buffer-tracker.h"
 #include "src/heap/heap-inl.h"
 
@@ -36,6 +37,9 @@ class ArrayBufferCollector::FreeingTask final : public CancelableTask {
 
  private:
   void RunInternal() final {
+    TRACE_BACKGROUND_GC(
+        heap_->tracer(),
+        GCTracer::BackgroundScope::BACKGROUND_ARRAY_BUFFER_FREE);
     heap_->array_buffer_collector()->FreeAllocations();
   }
 
@@ -44,10 +48,9 @@ class ArrayBufferCollector::FreeingTask final : public CancelableTask {
 
 void ArrayBufferCollector::FreeAllocationsOnBackgroundThread() {
   heap_->account_external_memory_concurrently_freed();
-  if (heap_->use_tasks() && FLAG_concurrent_array_buffer_freeing) {
-    FreeingTask* task = new FreeingTask(heap_);
-    V8::GetCurrentPlatform()->CallOnBackgroundThread(
-        task, v8::Platform::kShortRunningTask);
+  if (!heap_->IsTearingDown() && FLAG_concurrent_array_buffer_freeing) {
+    V8::GetCurrentPlatform()->CallOnWorkerThread(
+        base::make_unique<FreeingTask>(heap_));
   } else {
     // Fallback for when concurrency is disabled/restricted.
     FreeAllocations();

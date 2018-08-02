@@ -20,10 +20,17 @@
 #include "src/feedback-vector.h"
 #include "src/field-index-inl.h"
 #include "src/isolate-inl.h"
+#include "src/vector-slot-pair.h"
 
 namespace v8 {
 namespace internal {
 namespace compiler {
+
+// This is needed for gc_mole which will compile this file without the full set
+// of GN defined macros.
+#ifndef V8_TYPED_ARRAY_MAX_SIZE_IN_HEAP
+#define V8_TYPED_ARRAY_MAX_SIZE_IN_HEAP 64
+#endif
 
 namespace {
 
@@ -75,6 +82,10 @@ Reduction JSNativeContextSpecialization::Reduce(Node* node) {
       return ReduceJSHasInPrototypeChain(node);
     case IrOpcode::kJSOrdinaryHasInstance:
       return ReduceJSOrdinaryHasInstance(node);
+    case IrOpcode::kJSPromiseResolve:
+      return ReduceJSPromiseResolve(node);
+    case IrOpcode::kJSResolvePromise:
+      return ReduceJSResolvePromise(node);
     case IrOpcode::kJSLoadContext:
       return ReduceJSLoadContext(node);
     case IrOpcode::kJSLoadGlobal:
@@ -93,6 +104,8 @@ Reduction JSNativeContextSpecialization::Reduce(Node* node) {
       return ReduceJSStoreNamedOwn(node);
     case IrOpcode::kJSStoreDataPropertyInLiteral:
       return ReduceJSStoreDataPropertyInLiteral(node);
+    case IrOpcode::kJSStoreInArrayLiteral:
+      return ReduceJSStoreInArrayLiteral(node);
     default:
       break;
   }
@@ -167,7 +180,7 @@ Reduction JSNativeContextSpecialization::ReduceJSInstanceOf(Node* node) {
   if (m.HasValue() && m.Value()->IsJSObject()) {
     receiver = Handle<JSObject>::cast(m.Value());
   } else if (p.feedback().IsValid()) {
-    InstanceOfICNexus nexus(p.feedback().vector(), p.feedback().slot());
+    FeedbackNexus nexus(p.feedback().vector(), p.feedback().slot());
     if (!nexus.GetConstructorFeedback().ToHandle(&receiver)) return NoChange();
   } else {
     return NoChange();
@@ -410,6 +423,87 @@ Reduction JSNativeContextSpecialization::ReduceJSOrdinaryHasInstance(
   return NoChange();
 }
 
+// ES section #sec-promise-resolve
+Reduction JSNativeContextSpecialization::ReduceJSPromiseResolve(Node* node) {
+  DCHECK_EQ(IrOpcode::kJSPromiseResolve, node->opcode());
+  Node* constructor = NodeProperties::GetValueInput(node, 0);
+  Node* value = NodeProperties::GetValueInput(node, 1);
+  Node* context = NodeProperties::GetContextInput(node);
+  Node* frame_state = NodeProperties::GetFrameStateInput(node);
+  Node* effect = NodeProperties::GetEffectInput(node);
+  Node* control = NodeProperties::GetControlInput(node);
+
+  // Check if the {constructor} is the %Promise% function.
+  HeapObjectMatcher m(constructor);
+  if (!m.Is(handle(native_context()->promise_function()))) return NoChange();
+
+  // Check if we know something about the {value}.
+  ZoneHandleSet<Map> value_maps;
+  NodeProperties::InferReceiverMapsResult result =
+      NodeProperties::InferReceiverMaps(value, effect, &value_maps);
+  if (result == NodeProperties::kNoReceiverMaps) return NoChange();
+  DCHECK_NE(0, value_maps.size());
+
+  // Check that the {value} cannot be a JSPromise.
+  for (Handle<Map> const value_map : value_maps) {
+    if (value_map->IsJSPromiseMap()) return NoChange();
+  }
+
+  // Create a %Promise% instance and resolve it with {value}.
+  Node* promise = effect =
+      graph()->NewNode(javascript()->CreatePromise(), context, effect);
+  effect = graph()->NewNode(javascript()->ResolvePromise(), promise, value,
+                            context, frame_state, effect, control);
+  ReplaceWithValue(node, promise, effect, control);
+  return Replace(promise);
+}
+
+// ES section #sec-promise-resolve-functions
+Reduction JSNativeContextSpecialization::ReduceJSResolvePromise(Node* node) {
+  DCHECK_EQ(IrOpcode::kJSResolvePromise, node->opcode());
+  Node* promise = NodeProperties::GetValueInput(node, 0);
+  Node* resolution = NodeProperties::GetValueInput(node, 1);
+  Node* context = NodeProperties::GetContextInput(node);
+  Node* effect = NodeProperties::GetEffectInput(node);
+  Node* control = NodeProperties::GetControlInput(node);
+
+  // Check if we know something about the {resolution}.
+  ZoneHandleSet<Map> resolution_maps;
+  NodeProperties::InferReceiverMapsResult result =
+      NodeProperties::InferReceiverMaps(resolution, effect, &resolution_maps);
+  if (result != NodeProperties::kReliableReceiverMaps) return NoChange();
+  DCHECK_NE(0, resolution_maps.size());
+
+  // Compute property access info for "then" on {resolution}.
+  PropertyAccessInfo access_info;
+  AccessInfoFactory access_info_factory(dependencies(), native_context(),
+                                        graph()->zone());
+  if (!access_info_factory.ComputePropertyAccessInfo(
+          MapHandles(resolution_maps.begin(), resolution_maps.end()),
+          factory()->then_string(), AccessMode::kLoad, &access_info)) {
+    return NoChange();
+  }
+
+  // We can further optimize the case where {resolution}
+  // definitely doesn't have a "then" property.
+  if (!access_info.IsNotFound()) return NoChange();
+  PropertyAccessBuilder access_builder(jsgraph(), dependencies());
+
+  // Add proper dependencies on the {resolution}s [[Prototype]]s.
+  Handle<JSObject> holder;
+  if (access_info.holder().ToHandle(&holder)) {
+    access_builder.AssumePrototypesStable(native_context(),
+                                          access_info.receiver_maps(), holder);
+  }
+
+  // Simply fulfill the {promise} with the {resolution}.
+  Node* value = effect =
+      graph()->NewNode(javascript()->FulfillPromise(), promise, resolution,
+                       context, effect, control);
+  ReplaceWithValue(node, value, effect, control);
+  return Replace(value);
+}
+
 Reduction JSNativeContextSpecialization::ReduceJSLoadContext(Node* node) {
   DCHECK_EQ(IrOpcode::kJSLoadContext, node->opcode());
   ContextAccess const& access = ContextAccessOf(node->op());
@@ -596,8 +690,8 @@ Reduction JSNativeContextSpecialization::ReduceGlobalAccess(
           representation = MachineRepresentation::kTaggedPointer;
         } else {
           // Check that the {value} is a Smi.
-          value = effect = graph()->NewNode(simplified()->CheckSmi(), value,
-                                            effect, control);
+          value = effect = graph()->NewNode(
+              simplified()->CheckSmi(VectorSlotPair()), value, effect, control);
           property_cell_value_type = Type::SignedSmall();
           representation = MachineRepresentation::kTaggedSigned;
         }
@@ -944,16 +1038,6 @@ Reduction JSNativeContextSpecialization::ReduceNamedAccessFromNexus(
     return ReduceGlobalAccess(node, nullptr, value, name, access_mode);
   }
 
-  // Check if the {nexus} reports type feedback for the IC.
-  if (nexus.IsUninitialized()) {
-    if (flags() & kBailoutOnUninitialized) {
-      return ReduceSoftDeoptimize(
-          node,
-          DeoptimizeReason::kInsufficientTypeFeedbackForGenericNamedAccess);
-    }
-    return NoChange();
-  }
-
   // Extract receiver maps from the IC using the {nexus}.
   MapHandles receiver_maps;
   if (!ExtractReceiverMaps(receiver, effect, nexus, &receiver_maps)) {
@@ -966,6 +1050,7 @@ Reduction JSNativeContextSpecialization::ReduceNamedAccessFromNexus(
     }
     return NoChange();
   }
+  DCHECK(!nexus.IsUninitialized());
 
   // Try to lower the named access based on the {receiver_maps}.
   return ReduceNamedAccess(node, value, receiver_maps, name, access_mode);
@@ -1006,9 +1091,9 @@ Reduction JSNativeContextSpecialization::ReduceJSLoadNamed(Node* node) {
     }
   }
 
-  // Extract receiver maps from the load IC using the LoadICNexus.
+  // Extract receiver maps from the load IC using the FeedbackNexus.
   if (!p.feedback().IsValid()) return NoChange();
-  LoadICNexus nexus(p.feedback().vector(), p.feedback().slot());
+  FeedbackNexus nexus(p.feedback().vector(), p.feedback().slot());
 
   // Try to lower the named access based on the {receiver_maps}.
   return ReduceNamedAccessFromNexus(node, value, nexus, p.name(),
@@ -1021,9 +1106,9 @@ Reduction JSNativeContextSpecialization::ReduceJSStoreNamed(Node* node) {
   NamedAccess const& p = NamedAccessOf(node->op());
   Node* const value = NodeProperties::GetValueInput(node, 1);
 
-  // Extract receiver maps from the store IC using the StoreICNexus.
+  // Extract receiver maps from the store IC using the FeedbackNexus.
   if (!p.feedback().IsValid()) return NoChange();
-  StoreICNexus nexus(p.feedback().vector(), p.feedback().slot());
+  FeedbackNexus nexus(p.feedback().vector(), p.feedback().slot());
 
   // Try to lower the named access based on the {receiver_maps}.
   return ReduceNamedAccessFromNexus(node, value, nexus, p.name(),
@@ -1035,9 +1120,9 @@ Reduction JSNativeContextSpecialization::ReduceJSStoreNamedOwn(Node* node) {
   StoreNamedOwnParameters const& p = StoreNamedOwnParametersOf(node->op());
   Node* const value = NodeProperties::GetValueInput(node, 1);
 
-  // Extract receiver maps from the IC using the StoreOwnICNexus.
+  // Extract receiver maps from the IC using the FeedbackNexus.
   if (!p.feedback().IsValid()) return NoChange();
-  StoreOwnICNexus nexus(p.feedback().vector(), p.feedback().slot());
+  FeedbackNexus nexus(p.feedback().vector(), p.feedback().slot());
 
   // Try to lower the creation of a named property based on the {receiver_maps}.
   return ReduceNamedAccessFromNexus(node, value, nexus, p.name(),
@@ -1049,7 +1134,8 @@ Reduction JSNativeContextSpecialization::ReduceElementAccess(
     AccessMode access_mode, KeyedAccessLoadMode load_mode,
     KeyedAccessStoreMode store_mode) {
   DCHECK(node->opcode() == IrOpcode::kJSLoadProperty ||
-         node->opcode() == IrOpcode::kJSStoreProperty);
+         node->opcode() == IrOpcode::kJSStoreProperty ||
+         node->opcode() == IrOpcode::kJSStoreInArrayLiteral);
   Node* receiver = NodeProperties::GetValueInput(node, 0);
   Node* effect = NodeProperties::GetEffectInput(node);
   Node* control = NodeProperties::GetControlInput(node);
@@ -1061,13 +1147,11 @@ Reduction JSNativeContextSpecialization::ReduceElementAccess(
     if (access_mode == AccessMode::kStore) return NoChange();
 
     // Ensure that the {receiver} is actually a String.
-    receiver = effect = graph()->NewNode(simplified()->CheckString(), receiver,
-                                         effect, control);
+    receiver = effect = graph()->NewNode(
+        simplified()->CheckString(VectorSlotPair()), receiver, effect, control);
 
     // Determine the {receiver} length.
-    Node* length = effect = graph()->NewNode(
-        simplified()->LoadField(AccessBuilder::ForStringLength()), receiver,
-        effect, control);
+    Node* length = graph()->NewNode(simplified()->StringLength(), receiver);
 
     // Load the single character string from {receiver} or yield undefined
     // if the {index} is out of bounds (depending on the {load_mode}).
@@ -1265,9 +1349,8 @@ Reduction JSNativeContextSpecialization::ReduceElementAccess(
   return Replace(value);
 }
 
-template <typename KeyedICNexus>
 Reduction JSNativeContextSpecialization::ReduceKeyedAccess(
-    Node* node, Node* index, Node* value, KeyedICNexus const& nexus,
+    Node* node, Node* index, Node* value, FeedbackNexus const& nexus,
     AccessMode access_mode, KeyedAccessLoadMode load_mode,
     KeyedAccessStoreMode store_mode) {
   DCHECK(node->opcode() == IrOpcode::kJSLoadProperty ||
@@ -1355,16 +1438,6 @@ Reduction JSNativeContextSpecialization::ReduceKeyedAccess(
     }
   }
 
-  // Check if the {nexus} reports type feedback for the IC.
-  if (nexus.IsUninitialized()) {
-    if (flags() & kBailoutOnUninitialized) {
-      return ReduceSoftDeoptimize(
-          node,
-          DeoptimizeReason::kInsufficientTypeFeedbackForGenericKeyedAccess);
-    }
-    return NoChange();
-  }
-
   // Extract receiver maps from the {nexus}.
   MapHandles receiver_maps;
   if (!ExtractReceiverMaps(receiver, effect, nexus, &receiver_maps)) {
@@ -1377,6 +1450,7 @@ Reduction JSNativeContextSpecialization::ReduceKeyedAccess(
     }
     return NoChange();
   }
+  DCHECK(!nexus.IsUninitialized());
 
   // Optimize access for constant {index}.
   HeapObjectMatcher mindex(index);
@@ -1425,9 +1499,9 @@ Reduction JSNativeContextSpecialization::ReduceSoftDeoptimize(
   Node* effect = NodeProperties::GetEffectInput(node);
   Node* control = NodeProperties::GetControlInput(node);
   Node* frame_state = NodeProperties::FindFrameStateBefore(node);
-  Node* deoptimize =
-      graph()->NewNode(common()->Deoptimize(DeoptimizeKind::kSoft, reason),
-                       frame_state, effect, control);
+  Node* deoptimize = graph()->NewNode(
+      common()->Deoptimize(DeoptimizeKind::kSoft, reason, VectorSlotPair()),
+      frame_state, effect, control);
   // TODO(bmeurer): This should be on the AdvancedReducer somehow.
   NodeProperties::MergeControlToEnd(graph(), common(), deoptimize);
   Revisit(graph()->end());
@@ -1504,7 +1578,7 @@ Reduction JSNativeContextSpecialization::ReduceJSLoadProperty(Node* node) {
           Node* check = graph()->NewNode(simplified()->ReferenceEqual(),
                                          receiver_map, enumerator);
           effect = graph()->NewNode(
-              simplified()->CheckIf(DeoptimizeReason::kNoReason), check, effect,
+              simplified()->CheckIf(DeoptimizeReason::kWrongMap), check, effect,
               control);
         }
 
@@ -1525,9 +1599,9 @@ Reduction JSNativeContextSpecialization::ReduceJSLoadProperty(Node* node) {
             simplified()->BooleanNot(),
             graph()->NewNode(simplified()->ReferenceEqual(), enum_indices,
                              jsgraph()->EmptyFixedArrayConstant()));
-        effect =
-            graph()->NewNode(simplified()->CheckIf(DeoptimizeReason::kNoReason),
-                             check, effect, control);
+        effect = graph()->NewNode(
+            simplified()->CheckIf(DeoptimizeReason::kWrongEnumIndices), check,
+            effect, control);
 
         // Determine the index from the {enum_indices}.
         index = effect = graph()->NewNode(
@@ -1544,9 +1618,9 @@ Reduction JSNativeContextSpecialization::ReduceJSLoadProperty(Node* node) {
     }
   }
 
-  // Extract receiver maps from the keyed load IC using the KeyedLoadICNexus.
+  // Extract receiver maps from the keyed load IC using the FeedbackNexus.
   if (!p.feedback().IsValid()) return NoChange();
-  KeyedLoadICNexus nexus(p.feedback().vector(), p.feedback().slot());
+  FeedbackNexus nexus(p.feedback().vector(), p.feedback().slot());
 
   // Extract the keyed access load mode from the keyed load IC.
   KeyedAccessLoadMode load_mode = nexus.GetKeyedAccessLoadMode();
@@ -1562,9 +1636,9 @@ Reduction JSNativeContextSpecialization::ReduceJSStoreProperty(Node* node) {
   Node* const index = NodeProperties::GetValueInput(node, 1);
   Node* const value = NodeProperties::GetValueInput(node, 2);
 
-  // Extract receiver maps from the keyed store IC using the KeyedStoreICNexus.
+  // Extract receiver maps from the keyed store IC using the FeedbackNexus.
   if (!p.feedback().IsValid()) return NoChange();
-  KeyedStoreICNexus nexus(p.feedback().vector(), p.feedback().slot());
+  FeedbackNexus nexus(p.feedback().vector(), p.feedback().slot());
 
   // Extract the keyed access store mode from the keyed store IC.
   KeyedAccessStoreMode store_mode = nexus.GetKeyedAccessStoreMode();
@@ -1579,7 +1653,7 @@ Node* JSNativeContextSpecialization::InlinePropertyGetterCall(
     Node** control, ZoneVector<Node*>* if_exceptions,
     PropertyAccessInfo const& access_info) {
   Node* target = jsgraph()->Constant(access_info.constant());
-  FrameStateInfo const& frame_info = OpParameter<FrameStateInfo>(frame_state);
+  FrameStateInfo const& frame_info = FrameStateInfoOf(frame_state->op());
   Handle<SharedFunctionInfo> shared_info =
       frame_info.shared_info().ToHandleChecked();
   // Introduce the call to the getter function.
@@ -1618,7 +1692,7 @@ void JSNativeContextSpecialization::InlinePropertySetterCall(
     Node** effect, Node** control, ZoneVector<Node*>* if_exceptions,
     PropertyAccessInfo const& access_info) {
   Node* target = jsgraph()->Constant(access_info.constant());
-  FrameStateInfo const& frame_info = OpParameter<FrameStateInfo>(frame_state);
+  FrameStateInfo const& frame_info = FrameStateInfoOf(frame_state->op());
   Handle<SharedFunctionInfo> shared_info =
       frame_info.shared_info().ToHandleChecked();
   // Introduce the call to the setter function.
@@ -1664,7 +1738,7 @@ Node* JSNativeContextSpecialization::InlineApiCall(
   CallApiCallbackStub stub(isolate(), argc);
   CallInterfaceDescriptor call_interface_descriptor =
       stub.GetCallInterfaceDescriptor();
-  CallDescriptor* call_descriptor = Linkage::GetStubCallDescriptor(
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
       isolate(), graph()->zone(), call_interface_descriptor,
       call_interface_descriptor.GetStackParameterCount() + argc +
           1 /* implicit receiver */,
@@ -1775,7 +1849,7 @@ JSNativeContextSpecialization::BuildPropertyStore(
     Node* check =
         graph()->NewNode(simplified()->ReferenceEqual(), value, constant_value);
     effect =
-        graph()->NewNode(simplified()->CheckIf(DeoptimizeReason::kNoReason),
+        graph()->NewNode(simplified()->CheckIf(DeoptimizeReason::kWrongValue),
                          check, effect, control);
     value = constant_value;
   } else if (access_info.IsAccessorConstant()) {
@@ -1809,8 +1883,9 @@ JSNativeContextSpecialization::BuildPropertyStore(
            access_mode == AccessMode::kStoreInLiteral);
     switch (field_representation) {
       case MachineRepresentation::kFloat64: {
-        value = effect = graph()->NewNode(simplified()->CheckNumber(), value,
-                                          effect, control);
+        value = effect =
+            graph()->NewNode(simplified()->CheckNumber(VectorSlotPair()), value,
+                             effect, control);
         if (!field_index.is_inobject() || field_index.is_hidden_field() ||
             !FLAG_unbox_double_fields) {
           if (access_info.HasTransitionMap()) {
@@ -1852,8 +1927,8 @@ JSNativeContextSpecialization::BuildPropertyStore(
           Node* check = graph()->NewNode(simplified()->NumberEqual(),
                                          current_value, value);
           effect = graph()->NewNode(
-              simplified()->CheckIf(DeoptimizeReason::kNoReason), check, effect,
-              control);
+              simplified()->CheckIf(DeoptimizeReason::kWrongValue), check,
+              effect, control);
           return ValueEffectControl(value, effect, control);
         }
         break;
@@ -1871,14 +1946,14 @@ JSNativeContextSpecialization::BuildPropertyStore(
           Node* check = graph()->NewNode(simplified()->ReferenceEqual(),
                                          current_value, value);
           effect = graph()->NewNode(
-              simplified()->CheckIf(DeoptimizeReason::kNoReason), check, effect,
-              control);
+              simplified()->CheckIf(DeoptimizeReason::kWrongValue), check,
+              effect, control);
           return ValueEffectControl(value, effect, control);
         }
 
         if (field_representation == MachineRepresentation::kTaggedSigned) {
-          value = effect = graph()->NewNode(simplified()->CheckSmi(), value,
-                                            effect, control);
+          value = effect = graph()->NewNode(
+              simplified()->CheckSmi(VectorSlotPair()), value, effect, control);
           field_access.write_barrier_kind = kNoWriteBarrier;
 
         } else if (field_representation ==
@@ -1960,8 +2035,7 @@ Reduction JSNativeContextSpecialization::ReduceJSStoreDataPropertyInLiteral(
 
   if (!p.feedback().IsValid()) return NoChange();
 
-  StoreDataPropertyInLiteralICNexus nexus(p.feedback().vector(),
-                                          p.feedback().slot());
+  FeedbackNexus nexus(p.feedback().vector(), p.feedback().slot());
   if (nexus.IsUninitialized()) {
     return NoChange();
   }
@@ -2007,7 +2081,7 @@ Reduction JSNativeContextSpecialization::ReduceJSStoreDataPropertyInLiteral(
   Node* name = NodeProperties::GetValueInput(node, 1);
   Node* check = graph()->NewNode(simplified()->ReferenceEqual(), name,
                                  jsgraph()->HeapConstant(cached_name));
-  effect = graph()->NewNode(simplified()->CheckIf(DeoptimizeReason::kNoReason),
+  effect = graph()->NewNode(simplified()->CheckIf(DeoptimizeReason::kWrongName),
                             check, effect, control);
 
   Node* value = NodeProperties::GetValueInput(node, 2);
@@ -2024,6 +2098,45 @@ Reduction JSNativeContextSpecialization::ReduceJSStoreDataPropertyInLiteral(
 
   ReplaceWithValue(node, value, effect, control);
   return Replace(value);
+}
+
+Reduction JSNativeContextSpecialization::ReduceJSStoreInArrayLiteral(
+    Node* node) {
+  DCHECK_EQ(IrOpcode::kJSStoreInArrayLiteral, node->opcode());
+  FeedbackParameter const& p = FeedbackParameterOf(node->op());
+  Node* const receiver = NodeProperties::GetValueInput(node, 0);
+  Node* const index = NodeProperties::GetValueInput(node, 1);
+  Node* const value = NodeProperties::GetValueInput(node, 2);
+  Node* const effect = NodeProperties::GetEffectInput(node);
+
+  // Extract receiver maps from the keyed store IC using the FeedbackNexus.
+  if (!p.feedback().IsValid()) return NoChange();
+  FeedbackNexus nexus(p.feedback().vector(), p.feedback().slot());
+
+  // Extract the keyed access store mode from the keyed store IC.
+  KeyedAccessStoreMode store_mode = nexus.GetKeyedAccessStoreMode();
+
+  // Extract receiver maps from the {nexus}.
+  MapHandles receiver_maps;
+  if (!ExtractReceiverMaps(receiver, effect, nexus, &receiver_maps)) {
+    return NoChange();
+  } else if (receiver_maps.empty()) {
+    if (flags() & kBailoutOnUninitialized) {
+      return ReduceSoftDeoptimize(
+          node,
+          DeoptimizeReason::kInsufficientTypeFeedbackForGenericKeyedAccess);
+    }
+    return NoChange();
+  }
+  DCHECK(!nexus.IsUninitialized());
+  DCHECK_EQ(ELEMENT, nexus.GetKeyType());
+
+  if (nexus.ic_state() == MEGAMORPHIC) return NoChange();
+
+  // Try to lower the element access based on the {receiver_maps}.
+  return ReduceElementAccess(node, index, value, receiver_maps,
+                             AccessMode::kStoreInLiteral, STANDARD_LOAD,
+                             store_mode);
 }
 
 namespace {
@@ -2048,7 +2161,6 @@ JSNativeContextSpecialization::BuildElementAccess(
     Node* receiver, Node* index, Node* value, Node* effect, Node* control,
     ElementAccessInfo const& access_info, AccessMode access_mode,
     KeyedAccessLoadMode load_mode, KeyedAccessStoreMode store_mode) {
-  DCHECK_NE(AccessMode::kStoreInLiteral, access_mode);
 
   // TODO(bmeurer): We currently specialize based on elements kind. We should
   // also be able to properly support strings and other JSObjects here.
@@ -2096,11 +2208,21 @@ JSNativeContextSpecialization::BuildElementAccess(
           simplified()->LoadField(AccessBuilder::ForJSObjectElements()),
           receiver, effect, control);
 
-      // Load the base and external pointer for the {receiver}s {elements}.
-      base_pointer = effect = graph()->NewNode(
-          simplified()->LoadField(
-              AccessBuilder::ForFixedTypedArrayBaseBasePointer()),
-          elements, effect, control);
+      // Load the base pointer for the {receiver}. This will always be Smi
+      // zero unless we allow on-heap TypedArrays, which is only the case
+      // for Chrome. Node and Electron both set this limit to 0. Setting
+      // the base to Smi zero here allows the EffectControlLinearizer to
+      // optimize away the tricky part of the access later.
+      if (V8_TYPED_ARRAY_MAX_SIZE_IN_HEAP == 0) {
+        base_pointer = jsgraph()->ZeroConstant();
+      } else {
+        base_pointer = effect = graph()->NewNode(
+            simplified()->LoadField(
+                AccessBuilder::ForFixedTypedArrayBaseBasePointer()),
+            elements, effect, control);
+      }
+
+      // Load the external pointer for the {receiver}s {elements}.
       external_pointer = effect = graph()->NewNode(
           simplified()->LoadField(
               AccessBuilder::ForFixedTypedArrayBaseExternalPointer()),
@@ -2124,16 +2246,21 @@ JSNativeContextSpecialization::BuildElementAccess(
 
     if (load_mode == LOAD_IGNORE_OUT_OF_BOUNDS ||
         store_mode == STORE_NO_TRANSITION_IGNORE_OUT_OF_BOUNDS) {
-      // Check that the {index} is a valid array index, we do the actual
-      // bounds check below and just skip the store below if it's out of
+      // Only check that the {index} is in SignedSmall range. We do the actual
+      // bounds check below and just skip the property access if it's out of
       // bounds for the {receiver}.
-      index = effect = graph()->NewNode(simplified()->CheckBounds(), index,
-                                        jsgraph()->Constant(Smi::kMaxValue),
-                                        effect, control);
+      index = effect = graph()->NewNode(
+          simplified()->CheckSmi(VectorSlotPair()), index, effect, control);
+
+      // Cast the {index} to Unsigned32 range, so that the bounds checks
+      // below are performed on unsigned values, which means that all the
+      // Negative32 values are treated as out-of-bounds.
+      index = graph()->NewNode(simplified()->NumberToUint32(), index);
     } else {
       // Check that the {index} is in the valid range for the {receiver}.
-      index = effect = graph()->NewNode(simplified()->CheckBounds(), index,
-                                        length, effect, control);
+      index = effect =
+          graph()->NewNode(simplified()->CheckBounds(VectorSlotPair()), index,
+                           length, effect, control);
     }
 
     // Access the actual element.
@@ -2192,10 +2319,10 @@ JSNativeContextSpecialization::BuildElementAccess(
       case AccessMode::kStore: {
         // Ensure that the {value} is actually a Number or an Oddball,
         // and truncate it to a Number appropriately.
-        value = effect =
-            graph()->NewNode(simplified()->SpeculativeToNumber(
-                                 NumberOperationHint::kNumberOrOddball),
-                             value, effect, control);
+        value = effect = graph()->NewNode(
+            simplified()->SpeculativeToNumber(
+                NumberOperationHint::kNumberOrOddball, VectorSlotPair()),
+            value, effect, control);
 
         // Introduce the appropriate truncation for {value}. Currently we
         // only need to do this for ClamedUint8Array {receiver}s, as the
@@ -2245,10 +2372,11 @@ JSNativeContextSpecialization::BuildElementAccess(
         simplified()->LoadField(AccessBuilder::ForJSObjectElements()), receiver,
         effect, control);
 
-    // Don't try to store to a copy-on-write backing store.
+    // Don't try to store to a copy-on-write backing store (unless supported by
+    // the store mode).
     if (access_mode == AccessMode::kStore &&
         IsSmiOrObjectElementsKind(elements_kind) &&
-        store_mode != STORE_NO_TRANSITION_HANDLE_COW) {
+        !IsCOWHandlingStoreMode(store_mode)) {
       effect = graph()->NewNode(
           simplified()->CheckMaps(
               CheckMapsFlag::kNone,
@@ -2273,19 +2401,21 @@ JSNativeContextSpecialization::BuildElementAccess(
     // Check if we might need to grow the {elements} backing store.
     if (IsGrowStoreMode(store_mode)) {
       // For growing stores we validate the {index} below.
-      DCHECK_EQ(AccessMode::kStore, access_mode);
+      DCHECK(access_mode == AccessMode::kStore ||
+             access_mode == AccessMode::kStoreInLiteral);
     } else if (load_mode == LOAD_IGNORE_OUT_OF_BOUNDS &&
                CanTreatHoleAsUndefined(receiver_maps)) {
       // Check that the {index} is a valid array index, we do the actual
       // bounds check below and just skip the store below if it's out of
       // bounds for the {receiver}.
-      index = effect = graph()->NewNode(simplified()->CheckBounds(), index,
-                                        jsgraph()->Constant(Smi::kMaxValue),
-                                        effect, control);
+      index = effect = graph()->NewNode(
+          simplified()->CheckBounds(VectorSlotPair()), index,
+          jsgraph()->Constant(Smi::kMaxValue), effect, control);
     } else {
       // Check that the {index} is in the valid range for the {receiver}.
-      index = effect = graph()->NewNode(simplified()->CheckBounds(), index,
-                                        length, effect, control);
+      index = effect =
+          graph()->NewNode(simplified()->CheckBounds(VectorSlotPair()), index,
+                           length, effect, control);
     }
 
     // Compute the element access.
@@ -2404,13 +2534,15 @@ JSNativeContextSpecialization::BuildElementAccess(
         }
       }
     } else {
-      DCHECK_EQ(AccessMode::kStore, access_mode);
+      DCHECK(access_mode == AccessMode::kStore ||
+             access_mode == AccessMode::kStoreInLiteral);
       if (IsSmiElementsKind(elements_kind)) {
-        value = effect =
-            graph()->NewNode(simplified()->CheckSmi(), value, effect, control);
+        value = effect = graph()->NewNode(
+            simplified()->CheckSmi(VectorSlotPair()), value, effect, control);
       } else if (IsDoubleElementsKind(elements_kind)) {
-        value = effect = graph()->NewNode(simplified()->CheckNumber(), value,
-                                          effect, control);
+        value = effect =
+            graph()->NewNode(simplified()->CheckNumber(VectorSlotPair()), value,
+                             effect, control);
         // Make sure we do not store signalling NaNs into double arrays.
         value = graph()->NewNode(simplified()->NumberSilenceNaN(), value);
       }
@@ -2443,8 +2575,9 @@ JSNativeContextSpecialization::BuildElementAccess(
                                    jsgraph()->Constant(JSObject::kMaxGap))
                 : graph()->NewNode(simplified()->NumberAdd(), length,
                                    jsgraph()->OneConstant());
-        index = effect = graph()->NewNode(simplified()->CheckBounds(), index,
-                                          limit, effect, control);
+        index = effect =
+            graph()->NewNode(simplified()->CheckBounds(VectorSlotPair()), index,
+                             limit, effect, control);
 
         // Grow {elements} backing store if necessary.
         GrowFastElementsMode mode =
@@ -2452,8 +2585,17 @@ JSNativeContextSpecialization::BuildElementAccess(
                 ? GrowFastElementsMode::kDoubleElements
                 : GrowFastElementsMode::kSmiOrObjectElements;
         elements = effect = graph()->NewNode(
-            simplified()->MaybeGrowFastElements(mode), receiver, elements,
-            index, elements_length, effect, control);
+            simplified()->MaybeGrowFastElements(mode, VectorSlotPair()),
+            receiver, elements, index, elements_length, effect, control);
+
+        // If we didn't grow {elements}, it might still be COW, in which case we
+        // copy it now.
+        if (IsSmiOrObjectElementsKind(elements_kind) &&
+            store_mode == STORE_AND_GROW_NO_TRANSITION_HANDLE_COW) {
+          elements = effect =
+              graph()->NewNode(simplified()->EnsureWritableFastElements(),
+                               receiver, elements, effect, control);
+        }
 
         // Also update the "length" property if {receiver} is a JSArray.
         if (receiver_is_jsarray) {
@@ -2505,9 +2647,9 @@ Node* JSNativeContextSpecialization::BuildIndexedStringLoad(
     dependencies()->AssumePropertyCell(factory()->no_elements_protector());
 
     // Ensure that the {index} is a valid String length.
-    index = *effect = graph()->NewNode(simplified()->CheckBounds(), index,
-                                       jsgraph()->Constant(String::kMaxLength),
-                                       *effect, *control);
+    index = *effect = graph()->NewNode(
+        simplified()->CheckBounds(VectorSlotPair()), index,
+        jsgraph()->Constant(String::kMaxLength), *effect, *control);
 
     // Load the single character string from {receiver} or yield
     // undefined if the {index} is not within the valid bounds.
@@ -2520,26 +2662,35 @@ Node* JSNativeContextSpecialization::BuildIndexedStringLoad(
         graph()->NewNode(simplified()->MaskIndexWithBound(), index, length);
 
     Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-    Node* vtrue = graph()->NewNode(simplified()->StringCharAt(), receiver,
-                                   masked_index, if_true);
+    Node* etrue;
+    Node* vtrue = etrue =
+        graph()->NewNode(simplified()->StringCharCodeAt(), receiver,
+                         masked_index, *effect, if_true);
+    vtrue = graph()->NewNode(simplified()->StringFromSingleCharCode(), vtrue);
 
     Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
     Node* vfalse = jsgraph()->UndefinedConstant();
 
     *control = graph()->NewNode(common()->Merge(2), if_true, if_false);
+    *effect =
+        graph()->NewNode(common()->EffectPhi(2), etrue, *effect, *control);
     return graph()->NewNode(common()->Phi(MachineRepresentation::kTagged, 2),
                             vtrue, vfalse, *control);
   } else {
     // Ensure that {index} is less than {receiver} length.
-    index = *effect = graph()->NewNode(simplified()->CheckBounds(), index,
-                                       length, *effect, *control);
+    index = *effect =
+        graph()->NewNode(simplified()->CheckBounds(VectorSlotPair()), index,
+                         length, *effect, *control);
 
     Node* masked_index =
         graph()->NewNode(simplified()->MaskIndexWithBound(), index, length);
 
     // Return the character from the {receiver} as single character string.
-    return graph()->NewNode(simplified()->StringCharAt(), receiver,
-                            masked_index, *control);
+    Node* value = *effect =
+        graph()->NewNode(simplified()->StringCharCodeAt(), receiver,
+                         masked_index, *effect, *control);
+    value = graph()->NewNode(simplified()->StringFromSingleCharCode(), value);
+    return value;
   }
 }
 
@@ -2579,8 +2730,8 @@ Node* JSNativeContextSpecialization::BuildExtendPropertiesBackingStore(
         common()->Select(MachineRepresentation::kTaggedSigned),
         graph()->NewNode(simplified()->ObjectIsSmi(), properties), properties,
         jsgraph()->SmiConstant(PropertyArray::kNoHashSentinel));
-    hash = graph()->NewNode(common()->TypeGuard(Type::SignedSmall()), hash,
-                            control);
+    hash = effect = graph()->NewNode(common()->TypeGuard(Type::SignedSmall()),
+                                     hash, effect, control);
     hash =
         graph()->NewNode(simplified()->NumberShiftLeft(), hash,
                          jsgraph()->Constant(PropertyArray::HashField::kShift));
@@ -2594,6 +2745,10 @@ Node* JSNativeContextSpecialization::BuildExtendPropertiesBackingStore(
   }
   Node* new_length_and_hash = graph()->NewNode(
       simplified()->NumberBitwiseOr(), jsgraph()->Constant(new_length), hash);
+  // TDOO(jarin): Fix the typer to infer tighter bound for NumberBitwiseOr.
+  new_length_and_hash = effect =
+      graph()->NewNode(common()->TypeGuard(Type::SignedSmall()),
+                       new_length_and_hash, effect, control);
 
   // Allocate and initialize the new properties.
   AllocationBuilder a(jsgraph(), effect, control);
@@ -2647,11 +2802,21 @@ bool JSNativeContextSpecialization::ExtractReceiverMaps(
     Node* receiver, Node* effect, FeedbackNexus const& nexus,
     MapHandles* receiver_maps) {
   DCHECK_EQ(0, receiver_maps->size());
-  // See if we can infer a concrete type for the {receiver}.
-  if (InferReceiverMaps(receiver, effect, receiver_maps)) {
-    // We can assume that the {receiver} still has the inferred {receiver_maps}.
-    return true;
+  if (nexus.IsUninitialized()) return true;
+
+  // See if we can infer a concrete type for the {receiver}. Solely relying on
+  // the inference is not safe for keyed stores, because we would potentially
+  // miss out on transitions that need to be performed.
+  {
+    FeedbackSlotKind kind = nexus.kind();
+    bool use_inference =
+        !IsKeyedStoreICKind(kind) && !IsStoreInArrayLiteralICKind(kind);
+    if (use_inference && InferReceiverMaps(receiver, effect, receiver_maps)) {
+      // We can assume that {receiver} still has the inferred {receiver_maps}.
+      return true;
+    }
   }
+
   // Try to extract some maps from the {nexus}.
   if (nexus.ExtractMaps(receiver_maps) != 0) {
     // Try to filter impossible candidates based on inferred root map.
@@ -2668,6 +2833,7 @@ bool JSNativeContextSpecialization::ExtractReceiverMaps(
     }
     return true;
   }
+
   return false;
 }
 
@@ -2759,6 +2925,8 @@ JSOperatorBuilder* JSNativeContextSpecialization::javascript() const {
 SimplifiedOperatorBuilder* JSNativeContextSpecialization::simplified() const {
   return jsgraph()->simplified();
 }
+
+#undef V8_TYPED_ARRAY_MAX_SIZE_IN_HEAP
 
 }  // namespace compiler
 }  // namespace internal

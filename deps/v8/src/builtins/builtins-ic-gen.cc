@@ -29,10 +29,13 @@ IC_BUILTIN(LoadField)
 IC_BUILTIN(KeyedLoadICTrampoline)
 IC_BUILTIN(KeyedLoadIC_Megamorphic)
 IC_BUILTIN(KeyedLoadIC_PolymorphicName)
+IC_BUILTIN(StoreGlobalIC)
+IC_BUILTIN(StoreGlobalICTrampoline)
 IC_BUILTIN(StoreIC)
 IC_BUILTIN(StoreICTrampoline)
 IC_BUILTIN(KeyedStoreIC)
 IC_BUILTIN(KeyedStoreICTrampoline)
+IC_BUILTIN(StoreInArrayLiteralIC)
 
 IC_BUILTIN_PARAM(LoadGlobalIC, LoadGlobalIC, NOT_INSIDE_TYPEOF)
 IC_BUILTIN_PARAM(LoadGlobalICInsideTypeof, LoadGlobalIC, INSIDE_TYPEOF)
@@ -40,8 +43,6 @@ IC_BUILTIN_PARAM(LoadGlobalICTrampoline, LoadGlobalICTrampoline,
                  NOT_INSIDE_TYPEOF)
 IC_BUILTIN_PARAM(LoadGlobalICInsideTypeofTrampoline, LoadGlobalICTrampoline,
                  INSIDE_TYPEOF)
-IC_BUILTIN_PARAM(LoadICProtoArray, LoadICProtoArray, false)
-IC_BUILTIN_PARAM(LoadICProtoArrayThrowIfNonexistent, LoadICProtoArray, true)
 
 }  // namespace internal
 }  // namespace v8

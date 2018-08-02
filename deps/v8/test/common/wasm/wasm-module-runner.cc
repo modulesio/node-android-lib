@@ -9,8 +9,8 @@
 #include "src/objects-inl.h"
 #include "src/objects.h"
 #include "src/property-descriptor.h"
-#include "src/wasm/module-compiler.h"
 #include "src/wasm/module-decoder.h"
+#include "src/wasm/wasm-engine.h"
 #include "src/wasm/wasm-interpreter.h"
 #include "src/wasm/wasm-js.h"
 #include "src/wasm/wasm-module.h"
@@ -23,7 +23,18 @@ namespace wasm {
 namespace testing {
 
 uint32_t GetInitialMemSize(const WasmModule* module) {
-  return WasmModule::kPageSize * module->initial_pages;
+  return kWasmPageSize * module->initial_pages;
+}
+
+MaybeHandle<WasmInstanceObject> CompileAndInstantiateForTesting(
+    Isolate* isolate, ErrorThrower* thrower, const ModuleWireBytes& bytes) {
+  MaybeHandle<WasmModuleObject> module =
+      isolate->wasm_engine()->SyncCompile(isolate, thrower, bytes);
+  DCHECK_EQ(thrower->error(), module.is_null());
+  if (module.is_null()) return {};
+
+  return isolate->wasm_engine()->SyncInstantiate(
+      isolate, thrower, module.ToHandleChecked(), {}, {});
 }
 
 std::unique_ptr<WasmModule> DecodeWasmModuleForTesting(
@@ -86,7 +97,6 @@ bool InterpretWasmModuleForTesting(Isolate* isolate,
   Zone zone(isolate->allocator(), ZONE_NAME);
 
   WasmInterpreter* interpreter = WasmDebugInfo::SetupForTesting(instance);
-  WasmInterpreter::HeapObjectsScope heap_objects_scope(interpreter, instance);
   WasmInterpreter::Thread* thread = interpreter->GetThread(0);
   thread->Reset();
 
@@ -117,8 +127,8 @@ int32_t CompileAndRunWasmModule(Isolate* isolate, const byte* module_start,
                                 const byte* module_end) {
   HandleScope scope(isolate);
   ErrorThrower thrower(isolate, "CompileAndRunWasmModule");
-  MaybeHandle<WasmInstanceObject> instance = SyncCompileAndInstantiate(
-      isolate, &thrower, ModuleWireBytes(module_start, module_end), {}, {});
+  MaybeHandle<WasmInstanceObject> instance = CompileAndInstantiateForTesting(
+      isolate, &thrower, ModuleWireBytes(module_start, module_end));
   if (instance.is_null()) {
     return -1;
   }
@@ -130,15 +140,17 @@ int32_t CompileAndRunAsmWasmModule(Isolate* isolate, const byte* module_start,
                                    const byte* module_end) {
   HandleScope scope(isolate);
   ErrorThrower thrower(isolate, "CompileAndRunAsmWasmModule");
-  MaybeHandle<WasmModuleObject> module = wasm::SyncCompileTranslatedAsmJs(
-      isolate, &thrower, ModuleWireBytes(module_start, module_end),
-      Handle<Script>::null(), Vector<const byte>());
+  MaybeHandle<WasmModuleObject> module =
+      isolate->wasm_engine()->SyncCompileTranslatedAsmJs(
+          isolate, &thrower, ModuleWireBytes(module_start, module_end),
+          Handle<Script>::null(), Vector<const byte>());
   DCHECK_EQ(thrower.error(), module.is_null());
   if (module.is_null()) return -1;
 
-  MaybeHandle<WasmInstanceObject> instance = wasm::SyncInstantiate(
-      isolate, &thrower, module.ToHandleChecked(), Handle<JSReceiver>::null(),
-      Handle<JSArrayBuffer>::null());
+  MaybeHandle<WasmInstanceObject> instance =
+      isolate->wasm_engine()->SyncInstantiate(
+          isolate, &thrower, module.ToHandleChecked(),
+          Handle<JSReceiver>::null(), Handle<JSArrayBuffer>::null());
   DCHECK_EQ(thrower.error(), instance.is_null());
   if (instance.is_null()) return -1;
 
@@ -156,7 +168,6 @@ int32_t InterpretWasmModule(Isolate* isolate,
   v8::internal::HandleScope scope(isolate);
 
   WasmInterpreter* interpreter = WasmDebugInfo::SetupForTesting(instance);
-  WasmInterpreter::HeapObjectsScope heap_objects_scope(interpreter, instance);
   WasmInterpreter::Thread* thread = interpreter->GetThread(0);
   thread->Reset();
 
@@ -173,9 +184,9 @@ int32_t InterpretWasmModule(Isolate* isolate,
   isolate->clear_pending_exception();
 
   *possible_nondeterminism = thread->PossibleNondeterminism();
-  if (stack_overflow) return 0xdeadbeef;
+  if (stack_overflow) return 0xDEADBEEF;
 
-  if (thread->state() == WasmInterpreter::TRAPPED) return 0xdeadbeef;
+  if (thread->state() == WasmInterpreter::TRAPPED) return 0xDEADBEEF;
 
   if (interpreter_result == WasmInterpreter::FINISHED)
     return thread->GetReturnValue().to<int32_t>();

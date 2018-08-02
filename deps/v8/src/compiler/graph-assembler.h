@@ -8,6 +8,7 @@
 #include "src/compiler/js-graph.h"
 #include "src/compiler/node.h"
 #include "src/compiler/simplified-operator.h"
+#include "src/vector-slot-pair.h"
 
 namespace v8 {
 namespace internal {
@@ -28,8 +29,7 @@ namespace compiler {
   V(RoundFloat64ToInt32)                 \
   V(TruncateFloat64ToWord32)             \
   V(Float64ExtractHighWord32)            \
-  V(Float64Abs)                          \
-  V(BitcastWordToTagged)
+  V(Float64Abs)
 
 #define PURE_ASSEMBLER_MACH_BINOP_LIST(V) \
   V(WordShl)                              \
@@ -193,9 +193,13 @@ class GraphAssembler {
   // Debugging
   Node* DebugBreak();
 
+  Node* Unreachable();
+
   Node* Float64RoundDown(Node* value);
+  Node* Float64RoundTruncate(Node* value);
 
   Node* ToNumber(Node* value);
+  Node* BitcastWordToTagged(Node* value);
   Node* Allocate(PretenureFlag pretenure, Node* size);
   Node* LoadField(FieldAccess const&, Node* object);
   Node* LoadElement(ElementAccess const&, Node* object, Node* index);
@@ -209,14 +213,15 @@ class GraphAssembler {
   Node* Retain(Node* buffer);
   Node* UnsafePointerAdd(Node* base, Node* external);
 
-  Node* DeoptimizeIf(DeoptimizeReason reason, Node* condition,
-                     Node* frame_state);
+  Node* DeoptimizeIf(DeoptimizeReason reason, VectorSlotPair const& feedback,
+                     Node* condition, Node* frame_state);
   Node* DeoptimizeIfNot(DeoptimizeKind kind, DeoptimizeReason reason,
-                        Node* condition, Node* frame_state);
-  Node* DeoptimizeIfNot(DeoptimizeReason reason, Node* condition,
+                        VectorSlotPair const& feedback, Node* condition,
                         Node* frame_state);
+  Node* DeoptimizeIfNot(DeoptimizeReason reason, VectorSlotPair const& feedback,
+                        Node* condition, Node* frame_state);
   template <typename... Args>
-  Node* Call(const CallDescriptor* desc, Args... args);
+  Node* Call(const CallDescriptor* call_descriptor, Args... args);
   template <typename... Args>
   Node* Call(const Operator* op, Args... args);
 
@@ -402,8 +407,9 @@ void GraphAssembler::GotoIfNot(Node* condition,
 }
 
 template <typename... Args>
-Node* GraphAssembler::Call(const CallDescriptor* desc, Args... args) {
-  const Operator* op = common()->Call(desc);
+Node* GraphAssembler::Call(const CallDescriptor* call_descriptor,
+                           Args... args) {
+  const Operator* op = common()->Call(call_descriptor);
   return Call(op, args...);
 }
 

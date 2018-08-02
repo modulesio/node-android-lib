@@ -30,9 +30,6 @@ void Deoptimizer::TableEntryGenerator::Generate() {
   const int kFloatRegsSize = kFloatSize * SwVfpRegister::kNumRegisters;
 
   // Save all allocatable VFP registers before messing with them.
-  DCHECK_EQ(kDoubleRegZero.code(), 13);
-  DCHECK_EQ(kScratchDoubleReg.code(), 14);
-
   {
     // We use a run-time check for VFP32DREGS.
     CpuFeatureScope scope(masm(), VFP32DREGS,
@@ -245,9 +242,9 @@ void Deoptimizer::TableEntryGenerator::GeneratePrologue() {
   // Note that registers are still live when jumping to an entry.
 
   // We need to be able to generate immediates up to kMaxNumberOfEntries. On
-  // ARMv7, we can use movw (with a maximum immediate of 0xffff). On ARMv6, we
+  // ARMv7, we can use movw (with a maximum immediate of 0xFFFF). On ARMv6, we
   // need two instructions.
-  STATIC_ASSERT((kMaxNumberOfEntries - 1) <= 0xffff);
+  STATIC_ASSERT((kMaxNumberOfEntries - 1) <= 0xFFFF);
   UseScratchRegisterScope temps(masm());
   Register scratch = temps.Acquire();
   if (CpuFeatures::IsSupported(ARMv7)) {
@@ -263,7 +260,7 @@ void Deoptimizer::TableEntryGenerator::GeneratePrologue() {
     __ bind(&done);
   } else {
     // We want to keep table_entry_size_ == 8 (since this is the common case),
-    // but we need two instructions to load most immediates over 0xff. To handle
+    // but we need two instructions to load most immediates over 0xFF. To handle
     // this, we set the low byte in the main table, and then set the high byte
     // in a separate table if necessary.
     Label high_fixes[256];
@@ -272,7 +269,7 @@ void Deoptimizer::TableEntryGenerator::GeneratePrologue() {
     for (int i = 0; i < count(); i++) {
       int start = masm()->pc_offset();
       USE(start);
-      __ mov(scratch, Operand(i & 0xff));  // Set the low byte.
+      __ mov(scratch, Operand(i & 0xFF));  // Set the low byte.
       __ b(&high_fixes[i >> 8]);      // Jump to the secondary table.
       DCHECK_EQ(table_entry_size_, masm()->pc_offset() - start);
     }

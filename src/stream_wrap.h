@@ -73,20 +73,27 @@ class LibuvStreamWrap : public HandleWrap, public StreamBase {
     return stream()->type == UV_TCP;
   }
 
+  ShutdownWrap* CreateShutdownWrap(v8::Local<v8::Object> object) override;
+  WriteWrap* CreateWriteWrap(v8::Local<v8::Object> object) override;
+
  protected:
   LibuvStreamWrap(Environment* env,
                   v8::Local<v8::Object> object,
                   uv_stream_t* stream,
                   AsyncWrap::ProviderType provider);
 
-  ~LibuvStreamWrap() {
-  }
-
   AsyncWrap* GetAsyncWrap() override;
 
   static void AddMethods(Environment* env,
-                         v8::Local<v8::FunctionTemplate> target,
-                         int flags = StreamBase::kFlagNone);
+                         v8::Local<v8::FunctionTemplate> target);
+
+ protected:
+  inline void set_fd(int fd) {
+#ifdef _WIN32
+    fd_ = fd;
+#endif
+  }
+
 
  private:
   static void GetWriteQueueSize(
@@ -94,26 +101,23 @@ class LibuvStreamWrap : public HandleWrap, public StreamBase {
   static void SetBlocking(const v8::FunctionCallbackInfo<v8::Value>& args);
 
   // Callbacks for libuv
-  static void OnAlloc(uv_handle_t* handle,
-                      size_t suggested_size,
-                      uv_buf_t* buf);
+  void OnUvAlloc(size_t suggested_size, uv_buf_t* buf);
+  void OnUvRead(ssize_t nread, const uv_buf_t* buf);
 
-  static void OnRead(uv_stream_t* handle,
-                     ssize_t nread,
-                     const uv_buf_t* buf);
   static void AfterUvWrite(uv_write_t* req, int status);
   static void AfterUvShutdown(uv_shutdown_t* req, int status);
 
-  // Resource interface implementation
-  static void OnAllocImpl(size_t size, uv_buf_t* buf, void* ctx);
-  static void OnReadImpl(ssize_t nread,
-                         const uv_buf_t* buf,
-                         uv_handle_type pending,
-                         void* ctx);
-
-  void AfterWrite(WriteWrap* req_wrap, int status) override;
-
   uv_stream_t* const stream_;
+
+#ifdef _WIN32
+  // We don't always have an FD that we could look up on the stream_
+  // object itself on Windows. However, for some cases, we open handles
+  // using FDs; In that case, we can store and provide the value.
+  // This became necessary because it allows to detect situations
+  // where multiple handles refer to the same stdio FDs (in particular,
+  // a possible IPC channel and a regular process.std??? stream).
+  int fd_ = -1;
+#endif
 };
 
 

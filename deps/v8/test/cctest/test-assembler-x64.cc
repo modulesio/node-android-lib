@@ -33,10 +33,11 @@
 #include "src/base/platform/platform.h"
 #include "src/base/utils/random-number-generator.h"
 #include "src/double.h"
-#include "src/factory.h"
+#include "src/heap/factory.h"
 #include "src/macro-assembler.h"
 #include "src/objects-inl.h"
 #include "src/ostreams.h"
+#include "src/simulator.h"
 #include "test/cctest/cctest.h"
 
 namespace v8 {
@@ -52,12 +53,12 @@ namespace internal {
 // with GCC.  A different convention is used on 64-bit windows,
 // where the first four integer arguments are passed in RCX, RDX, R8 and R9.
 
-typedef int (*F0)();
-typedef int (*F1)(int64_t x);
-typedef int (*F2)(int64_t x, int64_t y);
-typedef unsigned (*F3)(double x);
-typedef uint64_t (*F4)(uint64_t* x, uint64_t* y);
-typedef uint64_t (*F5)(uint64_t x);
+typedef int(F0)();
+typedef int(F1)(int64_t x);
+typedef int(F2)(int64_t x, int64_t y);
+typedef unsigned(F3)(double x);
+typedef uint64_t(F4)(uint64_t* x, uint64_t* y);
+typedef uint64_t(F5)(uint64_t x);
 
 #ifdef _WIN64
 static const Register arg1 = rcx;
@@ -82,8 +83,10 @@ TEST(AssemblerX64ReturnOperation) {
 
   CodeDesc desc;
   masm.GetCode(CcTest::i_isolate(), &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
-  int result =  FUNCTION_CAST<F2>(buffer)(3, 2);
+  auto f = GeneratedCode<F2>::FromAddress(CcTest::i_isolate(), buffer);
+  int result = f.Call(3, 2);
   CHECK_EQ(2, result);
 }
 
@@ -111,8 +114,10 @@ TEST(AssemblerX64StackOperations) {
 
   CodeDesc desc;
   masm.GetCode(CcTest::i_isolate(), &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
-  int result =  FUNCTION_CAST<F2>(buffer)(3, 2);
+  auto f = GeneratedCode<F2>::FromAddress(CcTest::i_isolate(), buffer);
+  int result = f.Call(3, 2);
   CHECK_EQ(2, result);
 }
 
@@ -130,8 +135,10 @@ TEST(AssemblerX64ArithmeticOperations) {
 
   CodeDesc desc;
   masm.GetCode(CcTest::i_isolate(), &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
-  int result =  FUNCTION_CAST<F2>(buffer)(3, 2);
+  auto f = GeneratedCode<F2>::FromAddress(CcTest::i_isolate(), buffer);
+  int result = f.Call(3, 2);
   CHECK_EQ(5, result);
 }
 
@@ -156,26 +163,13 @@ TEST(AssemblerX64CmpbOperation) {
 
   CodeDesc desc;
   masm.GetCode(CcTest::i_isolate(), &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
-  int result =  FUNCTION_CAST<F2>(buffer)(0x1002, 0x2002);
+  auto f = GeneratedCode<F2>::FromAddress(CcTest::i_isolate(), buffer);
+  int result = f.Call(0x1002, 0x2002);
   CHECK_EQ(1, result);
-  result =  FUNCTION_CAST<F2>(buffer)(0x1002, 0x2003);
+  result = f.Call(0x1002, 0x2003);
   CHECK_EQ(0, result);
-}
-
-TEST(Regression684407) {
-  CcTest::InitializeVM();
-  size_t allocated;
-  byte* buffer = AllocateAssemblerBuffer(&allocated);
-  Assembler masm(CcTest::i_isolate(), buffer, static_cast<int>(allocated));
-
-  Address before = masm.pc();
-  __ cmpl(Operand(arg1, 0),
-          Immediate(0, RelocInfo::WASM_FUNCTION_TABLE_SIZE_REFERENCE));
-  Address after = masm.pc();
-  size_t instruction_size = static_cast<size_t>(after - before);
-  // Check that the immediate is not encoded as uint8.
-  CHECK_LT(sizeof(uint32_t), instruction_size);
 }
 
 TEST(AssemblerX64ImulOperation) {
@@ -193,12 +187,14 @@ TEST(AssemblerX64ImulOperation) {
 
   CodeDesc desc;
   masm.GetCode(CcTest::i_isolate(), &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
-  int result =  FUNCTION_CAST<F2>(buffer)(3, 2);
+  auto f = GeneratedCode<F2>::FromAddress(CcTest::i_isolate(), buffer);
+  int result = f.Call(3, 2);
   CHECK_EQ(0, result);
-  result =  FUNCTION_CAST<F2>(buffer)(0x100000000l, 0x100000000l);
+  result = f.Call(0x100000000l, 0x100000000l);
   CHECK_EQ(1, result);
-  result =  FUNCTION_CAST<F2>(buffer)(-0x100000000l, 0x100000000l);
+  result = f.Call(-0x100000000l, 0x100000000l);
   CHECK_EQ(-1, result);
 }
 
@@ -362,8 +358,10 @@ TEST(AssemblerX64testbwqOperation) {
 
   CodeDesc desc;
   masm.GetCode(CcTest::i_isolate(), &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
-  int result = FUNCTION_CAST<F2>(buffer)(0, 0);
+  auto f = GeneratedCode<F2>::FromAddress(CcTest::i_isolate(), buffer);
+  int result = f.Call(0, 0);
   CHECK_EQ(1, result);
 }
 
@@ -382,10 +380,12 @@ TEST(AssemblerX64XchglOperations) {
 
   CodeDesc desc;
   masm.GetCode(CcTest::i_isolate(), &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
   uint64_t left = V8_2PART_UINT64_C(0x10000000, 20000000);
   uint64_t right = V8_2PART_UINT64_C(0x30000000, 40000000);
-  uint64_t result = FUNCTION_CAST<F4>(buffer)(&left, &right);
+  auto f = GeneratedCode<F4>::FromAddress(CcTest::i_isolate(), buffer);
+  uint64_t result = f.Call(&left, &right);
   CHECK_EQ(V8_2PART_UINT64_C(0x00000000, 40000000), left);
   CHECK_EQ(V8_2PART_UINT64_C(0x00000000, 20000000), right);
   USE(result);
@@ -404,10 +404,12 @@ TEST(AssemblerX64OrlOperations) {
 
   CodeDesc desc;
   masm.GetCode(CcTest::i_isolate(), &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
   uint64_t left = V8_2PART_UINT64_C(0x10000000, 20000000);
   uint64_t right = V8_2PART_UINT64_C(0x30000000, 40000000);
-  uint64_t result = FUNCTION_CAST<F4>(buffer)(&left, &right);
+  auto f = GeneratedCode<F4>::FromAddress(CcTest::i_isolate(), buffer);
+  uint64_t result = f.Call(&left, &right);
   CHECK_EQ(V8_2PART_UINT64_C(0x10000000, 60000000), left);
   USE(result);
 }
@@ -425,9 +427,11 @@ TEST(AssemblerX64RollOperations) {
 
   CodeDesc desc;
   masm.GetCode(CcTest::i_isolate(), &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
   uint64_t src = V8_2PART_UINT64_C(0x10000000, C0000000);
-  uint64_t result = FUNCTION_CAST<F5>(buffer)(src);
+  auto f = GeneratedCode<F5>::FromAddress(CcTest::i_isolate(), buffer);
+  uint64_t result = f.Call(src);
   CHECK_EQ(V8_2PART_UINT64_C(0x00000000, 80000001), result);
 }
 
@@ -444,11 +448,13 @@ TEST(AssemblerX64SublOperations) {
 
   CodeDesc desc;
   masm.GetCode(CcTest::i_isolate(), &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
   uint64_t left = V8_2PART_UINT64_C(0x10000000, 20000000);
   uint64_t right = V8_2PART_UINT64_C(0x30000000, 40000000);
-  uint64_t result = FUNCTION_CAST<F4>(buffer)(&left, &right);
-  CHECK_EQ(V8_2PART_UINT64_C(0x10000000, e0000000), left);
+  auto f = GeneratedCode<F4>::FromAddress(CcTest::i_isolate(), buffer);
+  uint64_t result = f.Call(&left, &right);
+  CHECK_EQ(V8_2PART_UINT64_C(0x10000000, E0000000), left);
   USE(result);
 }
 
@@ -471,15 +477,17 @@ TEST(AssemblerX64TestlOperations) {
 
   CodeDesc desc;
   masm.GetCode(CcTest::i_isolate(), &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
   uint64_t left = V8_2PART_UINT64_C(0x10000000, 20000000);
   uint64_t right = V8_2PART_UINT64_C(0x30000000, 00000000);
-  uint64_t result = FUNCTION_CAST<F4>(buffer)(&left, &right);
+  auto f = GeneratedCode<F4>::FromAddress(CcTest::i_isolate(), buffer);
+  uint64_t result = f.Call(&left, &right);
   CHECK_EQ(1u, result);
 }
 
 TEST(AssemblerX64TestwOperations) {
-  typedef uint16_t (*F)(uint16_t * x);
+  typedef uint16_t(F)(uint16_t * x);
   CcTest::InitializeVM();
   size_t allocated;
   byte* buffer = AllocateAssemblerBuffer(&allocated);
@@ -488,7 +496,7 @@ TEST(AssemblerX64TestwOperations) {
   // Set rax with the ZF flag of the testl instruction.
   Label done;
   __ movq(rax, Immediate(1));
-  __ testw(Operand(arg1, 0), Immediate(0xf0f0));
+  __ testw(Operand(arg1, 0), Immediate(0xF0F0));
   __ j(not_zero, &done, Label::kNear);
   __ movq(rax, Immediate(0));
   __ bind(&done);
@@ -496,9 +504,11 @@ TEST(AssemblerX64TestwOperations) {
 
   CodeDesc desc;
   masm.GetCode(CcTest::i_isolate(), &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
   uint16_t operand = 0x8000;
-  uint16_t result = FUNCTION_CAST<F>(buffer)(&operand);
+  auto f = GeneratedCode<F>::FromAddress(CcTest::i_isolate(), buffer);
+  uint16_t result = f.Call(&operand);
   CHECK_EQ(1u, result);
 }
 
@@ -514,10 +524,12 @@ TEST(AssemblerX64XorlOperations) {
 
   CodeDesc desc;
   masm.GetCode(CcTest::i_isolate(), &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
   uint64_t left = V8_2PART_UINT64_C(0x10000000, 20000000);
   uint64_t right = V8_2PART_UINT64_C(0x30000000, 60000000);
-  uint64_t result = FUNCTION_CAST<F4>(buffer)(&left, &right);
+  auto f = GeneratedCode<F4>::FromAddress(CcTest::i_isolate(), buffer);
+  uint64_t result = f.Call(&left, &right);
   CHECK_EQ(V8_2PART_UINT64_C(0x10000000, 40000000), left);
   USE(result);
 }
@@ -548,8 +560,10 @@ TEST(AssemblerX64MemoryOperands) {
 
   CodeDesc desc;
   masm.GetCode(CcTest::i_isolate(), &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
-  int result =  FUNCTION_CAST<F2>(buffer)(3, 2);
+  auto f = GeneratedCode<F2>::FromAddress(CcTest::i_isolate(), buffer);
+  int result = f.Call(3, 2);
   CHECK_EQ(3, result);
 }
 
@@ -574,8 +588,10 @@ TEST(AssemblerX64ControlFlow) {
 
   CodeDesc desc;
   masm.GetCode(CcTest::i_isolate(), &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
-  int result =  FUNCTION_CAST<F2>(buffer)(3, 2);
+  auto f = GeneratedCode<F2>::FromAddress(CcTest::i_isolate(), buffer);
+  int result = f.Call(3, 2);
   CHECK_EQ(3, result);
 }
 
@@ -622,14 +638,16 @@ TEST(AssemblerX64LoopImmediates) {
 
   CodeDesc desc;
   masm.GetCode(CcTest::i_isolate(), &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   // Call the function from C++.
-  int result =  FUNCTION_CAST<F0>(buffer)();
+  auto f = GeneratedCode<F0>::FromAddress(CcTest::i_isolate(), buffer);
+  int result = f.Call();
   CHECK_EQ(1, result);
 }
 
 
 TEST(OperandRegisterDependency) {
-  int offsets[4] = {0, 1, 0xfed, 0xbeefcad};
+  int offsets[4] = {0, 1, 0xFED, 0xBEEFCAD};
   for (int i = 0; i < 4; i++) {
     int offset = offsets[i];
     CHECK(Operand(rax, offset).AddressUsesRegister(rax));
@@ -742,8 +760,8 @@ TEST(AssemblerMultiByteNop) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 
-  F0 f = FUNCTION_CAST<F0>(code->entry());
-  int res = f();
+  auto f = GeneratedCode<F0>::FromCode(*code);
+  int res = f.Call();
   CHECK_EQ(42, res);
 }
 
@@ -798,8 +816,8 @@ void DoSSE2(const v8::FunctionCallbackInfo<v8::Value>& args) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 
-  F0 f = FUNCTION_CAST<F0>(code->entry());
-  int res = f();
+  auto f = GeneratedCode<F0>::FromCode(*code);
+  int res = f.Call();
   args.GetReturnValue().Set(v8::Integer::New(CcTest::isolate(), res));
 }
 
@@ -866,15 +884,14 @@ TEST(AssemblerX64Extractps) {
   code->Print(os);
 #endif
 
-  F3 f = FUNCTION_CAST<F3>(code->entry());
+  auto f = GeneratedCode<F3>::FromCode(*code);
   uint64_t value1 = V8_2PART_UINT64_C(0x12345678, 87654321);
-  CHECK_EQ(0x12345678u, f(uint64_to_double(value1)));
+  CHECK_EQ(0x12345678u, f.Call(uint64_to_double(value1)));
   uint64_t value2 = V8_2PART_UINT64_C(0x87654321, 12345678);
-  CHECK_EQ(0x87654321u, f(uint64_to_double(value2)));
+  CHECK_EQ(0x87654321u, f.Call(uint64_to_double(value2)));
 }
 
-
-typedef int (*F6)(float x, float y);
+typedef int(F6)(float x, float y);
 TEST(AssemblerX64SSE) {
   CcTest::InitializeVM();
 
@@ -904,12 +921,42 @@ TEST(AssemblerX64SSE) {
   code->Print(os);
 #endif
 
-  F6 f = FUNCTION_CAST<F6>(code->entry());
-  CHECK_EQ(2, f(1.0, 2.0));
+  auto f = GeneratedCode<F6>::FromCode(*code);
+  CHECK_EQ(2, f.Call(1.0, 2.0));
 }
 
+TEST(AssemblerX64SSE3) {
+  CcTest::InitializeVM();
+  if (!CpuFeatures::IsSupported(SSE3)) return;
 
-typedef int (*F7)(double x, double y, double z);
+  Isolate* isolate = reinterpret_cast<Isolate*>(CcTest::isolate());
+  HandleScope scope(isolate);
+  v8::internal::byte buffer[256];
+  MacroAssembler masm(isolate, buffer, sizeof(buffer),
+                      v8::internal::CodeObjectRequired::kYes);
+  {
+    CpuFeatureScope fscope(&masm, SSE3);
+    __ shufps(xmm0, xmm0, 0x0);  // brocast first argument
+    __ shufps(xmm1, xmm1, 0x0);  // brocast second argument
+    __ haddps(xmm1, xmm0);
+    __ cvttss2si(rax, xmm1);
+    __ ret(0);
+  }
+
+  CodeDesc desc;
+  masm.GetCode(isolate, &desc);
+  Handle<Code> code =
+      isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
+#ifdef OBJECT_PRINT
+  OFStream os(stdout);
+  code->Print(os);
+#endif
+
+  auto f = GeneratedCode<F6>::FromCode(*code);
+  CHECK_EQ(4, f.Call(1.0, 2.0));
+}
+
+typedef int(F7)(double x, double y, double z);
 TEST(AssemblerX64FMA_sd) {
   CcTest::InitializeVM();
   if (!CpuFeatures::IsSupported(FMA3)) return;
@@ -1130,12 +1177,12 @@ TEST(AssemblerX64FMA_sd) {
   code->Print(os);
 #endif
 
-  F7 f = FUNCTION_CAST<F7>(code->entry());
-  CHECK_EQ(0, f(0.000092662107262076, -2.460774966188315, -1.0958787393627414));
+  auto f = GeneratedCode<F7>::FromCode(*code);
+  CHECK_EQ(
+      0, f.Call(0.000092662107262076, -2.460774966188315, -1.0958787393627414));
 }
 
-
-typedef int (*F8)(float x, float y, float z);
+typedef int(F8)(float x, float y, float z);
 TEST(AssemblerX64FMA_ss) {
   CcTest::InitializeVM();
   if (!CpuFeatures::IsSupported(FMA3)) return;
@@ -1356,8 +1403,8 @@ TEST(AssemblerX64FMA_ss) {
   code->Print(os);
 #endif
 
-  F8 f = FUNCTION_CAST<F8>(code->entry());
-  CHECK_EQ(0, f(9.26621069e-05f, -2.4607749f, -1.09587872f));
+  auto f = GeneratedCode<F8>::FromCode(*code);
+  CHECK_EQ(0, f.Call(9.26621069e-05f, -2.4607749f, -1.09587872f));
 }
 
 
@@ -1431,8 +1478,8 @@ TEST(AssemblerX64SSE_ss) {
   code->Print(os);
 #endif
 
-  F8 f = FUNCTION_CAST<F8>(code->entry());
-  int res = f(1.0f, 2.0f, 3.0f);
+  auto f = GeneratedCode<F8>::FromCode(*code);
+  int res = f.Call(1.0f, 2.0f, 3.0f);
   PrintF("f(1,2,3) = %d\n", res);
   CHECK_EQ(6, res);
 }
@@ -1452,7 +1499,7 @@ TEST(AssemblerX64AVX_ss) {
     // arguments in xmm0, xmm1 and xmm2
     __ subq(rsp, Immediate(kDoubleSize * 2));  // For memory operand
 
-    __ movl(rdx, Immediate(0xc2f64000));  // -123.125
+    __ movl(rdx, Immediate(0xC2F64000));  // -123.125
     __ vmovd(xmm4, rdx);
     __ vmovss(Operand(rsp, 0), xmm4);
     __ vmovss(xmm5, Operand(rsp, 0));
@@ -1516,8 +1563,8 @@ TEST(AssemblerX64AVX_ss) {
   code->Print(os);
 #endif
 
-  F8 f = FUNCTION_CAST<F8>(code->entry());
-  int res = f(1.0f, 2.0f, 3.0f);
+  auto f = GeneratedCode<F8>::FromCode(*code);
+  int res = f.Call(1.0f, 2.0f, 3.0f);
   PrintF("f(1,2,3) = %d\n", res);
   CHECK_EQ(6, res);
 }
@@ -1546,7 +1593,7 @@ TEST(AssemblerX64AVX_sd) {
 
     // Test vcvtss2sd & vcvtsd2ss
     __ movl(rax, Immediate(9));
-    __ movq(rdx, V8_INT64_C(0x426D1A0000000000));
+    __ movq(rdx, uint64_t{0x426D1A0000000000});
     __ movq(Operand(rsp, 0), rdx);
     __ vcvtsd2ss(xmm6, xmm6, Operand(rsp, 0));
     __ vcvtss2sd(xmm7, xmm6, xmm6);
@@ -1572,10 +1619,10 @@ TEST(AssemblerX64AVX_sd) {
 
     // Test vcvttsd2siq
     __ movl(rax, Immediate(11));
-    __ movq(rdx, V8_INT64_C(0x426D1A94A2000000));  // 1.0e12
+    __ movq(rdx, uint64_t{0x426D1A94A2000000});  // 1.0e12
     __ vmovq(xmm6, rdx);
     __ vcvttsd2siq(rcx, xmm6);
-    __ movq(rdx, V8_INT64_C(1000000000000));
+    __ movq(rdx, uint64_t{1000000000000});
     __ cmpq(rcx, rdx);
     __ j(not_equal, &exit);
     __ xorq(rcx, rcx);
@@ -1586,9 +1633,9 @@ TEST(AssemblerX64AVX_sd) {
 
     // Test vmovmskpd
     __ movl(rax, Immediate(12));
-    __ movq(rdx, V8_INT64_C(0x426D1A94A2000000));  // 1.0e12
+    __ movq(rdx, uint64_t{0x426D1A94A2000000});  // 1.0e12
     __ vmovq(xmm6, rdx);
-    __ movq(rdx, V8_INT64_C(0xC26D1A94A2000000));  // -1.0e12
+    __ movq(rdx, uint64_t{0xC26D1A94A2000000});  // -1.0e12
     __ vmovq(xmm7, rdx);
     __ shufps(xmm6, xmm7, 0x44);
     __ vmovmskpd(rdx, xmm6);
@@ -1596,54 +1643,54 @@ TEST(AssemblerX64AVX_sd) {
     __ j(not_equal, &exit);
 
     // Test vpcmpeqd
-    __ movq(rdx, V8_UINT64_C(0x0123456789abcdef));
-    __ movq(rcx, V8_UINT64_C(0x0123456788888888));
+    __ movq(rdx, uint64_t{0x0123456789ABCDEF});
+    __ movq(rcx, uint64_t{0x0123456788888888});
     __ vmovq(xmm6, rdx);
     __ vmovq(xmm7, rcx);
     __ vpcmpeqd(xmm8, xmm6, xmm7);
     __ vmovq(rdx, xmm8);
-    __ movq(rcx, V8_UINT64_C(0xffffffff00000000));
+    __ movq(rcx, uint64_t{0xFFFFFFFF00000000});
     __ cmpq(rcx, rdx);
     __ movl(rax, Immediate(13));
     __ j(not_equal, &exit);
 
     // Test vpsllq, vpsrlq
     __ movl(rax, Immediate(13));
-    __ movq(rdx, V8_UINT64_C(0x0123456789abcdef));
+    __ movq(rdx, uint64_t{0x0123456789ABCDEF});
     __ vmovq(xmm6, rdx);
     __ vpsrlq(xmm7, xmm6, 4);
     __ vmovq(rdx, xmm7);
-    __ movq(rcx, V8_UINT64_C(0x00123456789abcde));
+    __ movq(rcx, uint64_t{0x00123456789ABCDE});
     __ cmpq(rdx, rcx);
     __ j(not_equal, &exit);
     __ vpsllq(xmm7, xmm6, 12);
     __ vmovq(rdx, xmm7);
-    __ movq(rcx, V8_UINT64_C(0x3456789abcdef000));
+    __ movq(rcx, uint64_t{0x3456789ABCDEF000});
     __ cmpq(rdx, rcx);
     __ j(not_equal, &exit);
 
     // Test vandpd, vorpd, vxorpd
     __ movl(rax, Immediate(14));
-    __ movl(rdx, Immediate(0x00ff00ff));
-    __ movl(rcx, Immediate(0x0f0f0f0f));
+    __ movl(rdx, Immediate(0x00FF00FF));
+    __ movl(rcx, Immediate(0x0F0F0F0F));
     __ vmovd(xmm4, rdx);
     __ vmovd(xmm5, rcx);
     __ vandpd(xmm6, xmm4, xmm5);
     __ vmovd(rdx, xmm6);
-    __ cmpl(rdx, Immediate(0x000f000f));
+    __ cmpl(rdx, Immediate(0x000F000F));
     __ j(not_equal, &exit);
     __ vorpd(xmm6, xmm4, xmm5);
     __ vmovd(rdx, xmm6);
-    __ cmpl(rdx, Immediate(0x0fff0fff));
+    __ cmpl(rdx, Immediate(0x0FFF0FFF));
     __ j(not_equal, &exit);
     __ vxorpd(xmm6, xmm4, xmm5);
     __ vmovd(rdx, xmm6);
-    __ cmpl(rdx, Immediate(0x0ff00ff0));
+    __ cmpl(rdx, Immediate(0x0FF00FF0));
     __ j(not_equal, &exit);
 
     // Test vsqrtsd
     __ movl(rax, Immediate(15));
-    __ movq(rdx, V8_UINT64_C(0x4004000000000000));  // 2.5
+    __ movq(rdx, uint64_t{0x4004000000000000});  // 2.5
     __ vmovq(xmm4, rdx);
     __ vmulsd(xmm5, xmm4, xmm4);
     __ vmovsd(Operand(rsp, 0), xmm5);
@@ -1658,10 +1705,10 @@ TEST(AssemblerX64AVX_sd) {
 
     // Test vroundsd
     __ movl(rax, Immediate(16));
-    __ movq(rdx, V8_UINT64_C(0x4002000000000000));  // 2.25
+    __ movq(rdx, uint64_t{0x4002000000000000});  // 2.25
     __ vmovq(xmm4, rdx);
     __ vroundsd(xmm5, xmm4, xmm4, kRoundUp);
-    __ movq(rcx, V8_UINT64_C(0x4008000000000000));  // 3.0
+    __ movq(rcx, uint64_t{0x4008000000000000});  // 3.0
     __ vmovq(xmm6, rcx);
     __ vucomisd(xmm5, xmm6);
     __ j(not_equal, &exit);
@@ -1669,7 +1716,7 @@ TEST(AssemblerX64AVX_sd) {
     // Test vcvtlsi2sd
     __ movl(rax, Immediate(17));
     __ movl(rdx, Immediate(6));
-    __ movq(rcx, V8_UINT64_C(0x4018000000000000));  // 6.0
+    __ movq(rcx, uint64_t{0x4018000000000000});  // 6.0
     __ vmovq(xmm5, rcx);
     __ vcvtlsi2sd(xmm6, xmm6, rdx);
     __ vucomisd(xmm5, xmm6);
@@ -1681,8 +1728,8 @@ TEST(AssemblerX64AVX_sd) {
 
     // Test vcvtqsi2sd
     __ movl(rax, Immediate(18));
-    __ movq(rdx, V8_UINT64_C(0x2000000000000000));  // 2 << 0x3c
-    __ movq(rcx, V8_UINT64_C(0x43c0000000000000));
+    __ movq(rdx, uint64_t{0x2000000000000000});  // 2 << 0x3C
+    __ movq(rcx, uint64_t{0x43C0000000000000});
     __ vmovq(xmm5, rcx);
     __ vcvtqsi2sd(xmm6, xmm6, rdx);
     __ vucomisd(xmm5, xmm6);
@@ -1690,13 +1737,13 @@ TEST(AssemblerX64AVX_sd) {
 
     // Test vcvtsd2si
     __ movl(rax, Immediate(19));
-    __ movq(rdx, V8_UINT64_C(0x4018000000000000));  // 6.0
+    __ movq(rdx, uint64_t{0x4018000000000000});  // 6.0
     __ vmovq(xmm5, rdx);
     __ vcvtsd2si(rcx, xmm5);
     __ cmpl(rcx, Immediate(6));
     __ j(not_equal, &exit);
 
-    __ movq(rdx, V8_INT64_C(0x3ff0000000000000));  // 1.0
+    __ movq(rdx, uint64_t{0x3FF0000000000000});  // 1.0
     __ vmovq(xmm7, rdx);
     __ vmulsd(xmm1, xmm1, xmm7);
     __ movq(Operand(rsp, 0), rdx);
@@ -1755,8 +1802,8 @@ TEST(AssemblerX64AVX_sd) {
   code->Print(os);
 #endif
 
-  F7 f = FUNCTION_CAST<F7>(code->entry());
-  int res = f(1.0, 2.0, 3.0);
+  auto f = GeneratedCode<F7>::FromCode(*code);
+  int res = f.Call(1.0, 2.0, 3.0);
   PrintF("f(1,2,3) = %d\n", res);
   CHECK_EQ(6, res);
 }
@@ -1775,160 +1822,160 @@ TEST(AssemblerX64BMI1) {
     CpuFeatureScope fscope(&masm, BMI1);
     Label exit;
 
-    __ movq(rcx, V8_UINT64_C(0x1122334455667788));  // source operand
+    __ movq(rcx, uint64_t{0x1122334455667788});     // source operand
     __ pushq(rcx);                                  // For memory operand
 
     // andn
-    __ movq(rdx, V8_UINT64_C(0x1000000020000000));
+    __ movq(rdx, uint64_t{0x1000000020000000});
 
     __ movl(rax, Immediate(1));  // Test number
     __ andnq(r8, rdx, rcx);
-    __ movq(r9, V8_UINT64_C(0x0122334455667788));  // expected result
+    __ movq(r9, uint64_t{0x0122334455667788});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ andnq(r8, rdx, Operand(rsp, 0));
-    __ movq(r9, V8_UINT64_C(0x0122334455667788));  // expected result
+    __ movq(r9, uint64_t{0x0122334455667788});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ andnl(r8, rdx, rcx);
-    __ movq(r9, V8_UINT64_C(0x0000000055667788));  // expected result
+    __ movq(r9, uint64_t{0x0000000055667788});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ andnl(r8, rdx, Operand(rsp, 0));
-    __ movq(r9, V8_UINT64_C(0x0000000055667788));  // expected result
+    __ movq(r9, uint64_t{0x0000000055667788});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     // bextr
-    __ movq(rdx, V8_UINT64_C(0x0000000000002808));
+    __ movq(rdx, uint64_t{0x0000000000002808});
 
     __ incq(rax);
     __ bextrq(r8, rcx, rdx);
-    __ movq(r9, V8_UINT64_C(0x0000003344556677));  // expected result
+    __ movq(r9, uint64_t{0x0000003344556677});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ bextrq(r8, Operand(rsp, 0), rdx);
-    __ movq(r9, V8_UINT64_C(0x0000003344556677));  // expected result
+    __ movq(r9, uint64_t{0x0000003344556677});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ bextrl(r8, rcx, rdx);
-    __ movq(r9, V8_UINT64_C(0x0000000000556677));  // expected result
+    __ movq(r9, uint64_t{0x0000000000556677});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ bextrl(r8, Operand(rsp, 0), rdx);
-    __ movq(r9, V8_UINT64_C(0x0000000000556677));  // expected result
+    __ movq(r9, uint64_t{0x0000000000556677});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     // blsi
     __ incq(rax);
     __ blsiq(r8, rcx);
-    __ movq(r9, V8_UINT64_C(0x0000000000000008));  // expected result
+    __ movq(r9, uint64_t{0x0000000000000008});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ blsiq(r8, Operand(rsp, 0));
-    __ movq(r9, V8_UINT64_C(0x0000000000000008));  // expected result
+    __ movq(r9, uint64_t{0x0000000000000008});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ blsil(r8, rcx);
-    __ movq(r9, V8_UINT64_C(0x0000000000000008));  // expected result
+    __ movq(r9, uint64_t{0x0000000000000008});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ blsil(r8, Operand(rsp, 0));
-    __ movq(r9, V8_UINT64_C(0x0000000000000008));  // expected result
+    __ movq(r9, uint64_t{0x0000000000000008});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     // blsmsk
     __ incq(rax);
     __ blsmskq(r8, rcx);
-    __ movq(r9, V8_UINT64_C(0x000000000000000f));  // expected result
+    __ movq(r9, uint64_t{0x000000000000000F});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ blsmskq(r8, Operand(rsp, 0));
-    __ movq(r9, V8_UINT64_C(0x000000000000000f));  // expected result
+    __ movq(r9, uint64_t{0x000000000000000F});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ blsmskl(r8, rcx);
-    __ movq(r9, V8_UINT64_C(0x000000000000000f));  // expected result
+    __ movq(r9, uint64_t{0x000000000000000F});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ blsmskl(r8, Operand(rsp, 0));
-    __ movq(r9, V8_UINT64_C(0x000000000000000f));  // expected result
+    __ movq(r9, uint64_t{0x000000000000000F});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     // blsr
     __ incq(rax);
     __ blsrq(r8, rcx);
-    __ movq(r9, V8_UINT64_C(0x1122334455667780));  // expected result
+    __ movq(r9, uint64_t{0x1122334455667780});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ blsrq(r8, Operand(rsp, 0));
-    __ movq(r9, V8_UINT64_C(0x1122334455667780));  // expected result
+    __ movq(r9, uint64_t{0x1122334455667780});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ blsrl(r8, rcx);
-    __ movq(r9, V8_UINT64_C(0x0000000055667780));  // expected result
+    __ movq(r9, uint64_t{0x0000000055667780});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ blsrl(r8, Operand(rsp, 0));
-    __ movq(r9, V8_UINT64_C(0x0000000055667780));  // expected result
+    __ movq(r9, uint64_t{0x0000000055667780});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     // tzcnt
     __ incq(rax);
     __ tzcntq(r8, rcx);
-    __ movq(r9, V8_UINT64_C(0x0000000000000003));  // expected result
+    __ movq(r9, uint64_t{0x0000000000000003});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ tzcntq(r8, Operand(rsp, 0));
-    __ movq(r9, V8_UINT64_C(0x0000000000000003));  // expected result
+    __ movq(r9, uint64_t{0x0000000000000003});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ tzcntl(r8, rcx);
-    __ movq(r9, V8_UINT64_C(0x0000000000000003));  // expected result
+    __ movq(r9, uint64_t{0x0000000000000003});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ tzcntl(r8, Operand(rsp, 0));
-    __ movq(r9, V8_UINT64_C(0x0000000000000003));  // expected result
+    __ movq(r9, uint64_t{0x0000000000000003});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
@@ -1947,8 +1994,8 @@ TEST(AssemblerX64BMI1) {
   code->Print(os);
 #endif
 
-  F0 f = FUNCTION_CAST<F0>(code->entry());
-  CHECK_EQ(0, f());
+  auto f = GeneratedCode<F0>::FromCode(*code);
+  CHECK_EQ(0, f.Call());
 }
 
 
@@ -1965,30 +2012,30 @@ TEST(AssemblerX64LZCNT) {
     CpuFeatureScope fscope(&masm, LZCNT);
     Label exit;
 
-    __ movq(rcx, V8_UINT64_C(0x1122334455667788));  // source operand
+    __ movq(rcx, uint64_t{0x1122334455667788});     // source operand
     __ pushq(rcx);                                  // For memory operand
 
     __ movl(rax, Immediate(1));  // Test number
     __ lzcntq(r8, rcx);
-    __ movq(r9, V8_UINT64_C(0x0000000000000003));  // expected result
+    __ movq(r9, uint64_t{0x0000000000000003});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ lzcntq(r8, Operand(rsp, 0));
-    __ movq(r9, V8_UINT64_C(0x0000000000000003));  // expected result
+    __ movq(r9, uint64_t{0x0000000000000003});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ lzcntl(r8, rcx);
-    __ movq(r9, V8_UINT64_C(0x0000000000000001));  // expected result
+    __ movq(r9, uint64_t{0x0000000000000001});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ lzcntl(r8, Operand(rsp, 0));
-    __ movq(r9, V8_UINT64_C(0x0000000000000001));  // expected result
+    __ movq(r9, uint64_t{0x0000000000000001});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
@@ -2007,8 +2054,8 @@ TEST(AssemblerX64LZCNT) {
   code->Print(os);
 #endif
 
-  F0 f = FUNCTION_CAST<F0>(code->entry());
-  CHECK_EQ(0, f());
+  auto f = GeneratedCode<F0>::FromCode(*code);
+  CHECK_EQ(0, f.Call());
 }
 
 
@@ -2025,30 +2072,30 @@ TEST(AssemblerX64POPCNT) {
     CpuFeatureScope fscope(&masm, POPCNT);
     Label exit;
 
-    __ movq(rcx, V8_UINT64_C(0x1111111111111100));  // source operand
+    __ movq(rcx, uint64_t{0x1111111111111100});     // source operand
     __ pushq(rcx);                                  // For memory operand
 
     __ movl(rax, Immediate(1));  // Test number
     __ popcntq(r8, rcx);
-    __ movq(r9, V8_UINT64_C(0x000000000000000e));  // expected result
+    __ movq(r9, uint64_t{0x000000000000000E});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ popcntq(r8, Operand(rsp, 0));
-    __ movq(r9, V8_UINT64_C(0x000000000000000e));  // expected result
+    __ movq(r9, uint64_t{0x000000000000000E});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ popcntl(r8, rcx);
-    __ movq(r9, V8_UINT64_C(0x0000000000000006));  // expected result
+    __ movq(r9, uint64_t{0x0000000000000006});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ popcntl(r8, Operand(rsp, 0));
-    __ movq(r9, V8_UINT64_C(0x0000000000000006));  // expected result
+    __ movq(r9, uint64_t{0x0000000000000006});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
@@ -2067,8 +2114,8 @@ TEST(AssemblerX64POPCNT) {
   code->Print(os);
 #endif
 
-  F0 f = FUNCTION_CAST<F0>(code->entry());
-  CHECK_EQ(0, f());
+  auto f = GeneratedCode<F0>::FromCode(*code);
+  CHECK_EQ(0, f.Call());
 }
 
 
@@ -2085,232 +2132,232 @@ TEST(AssemblerX64BMI2) {
     CpuFeatureScope fscope(&masm, BMI2);
     Label exit;
     __ pushq(rbx);                                  // save rbx
-    __ movq(rcx, V8_UINT64_C(0x1122334455667788));  // source operand
+    __ movq(rcx, uint64_t{0x1122334455667788});     // source operand
     __ pushq(rcx);                                  // For memory operand
 
     // bzhi
-    __ movq(rdx, V8_UINT64_C(0x0000000000000009));
+    __ movq(rdx, uint64_t{0x0000000000000009});
 
     __ movl(rax, Immediate(1));  // Test number
     __ bzhiq(r8, rcx, rdx);
-    __ movq(r9, V8_UINT64_C(0x0000000000000188));  // expected result
+    __ movq(r9, uint64_t{0x0000000000000188});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ bzhiq(r8, Operand(rsp, 0), rdx);
-    __ movq(r9, V8_UINT64_C(0x0000000000000188));  // expected result
+    __ movq(r9, uint64_t{0x0000000000000188});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ bzhil(r8, rcx, rdx);
-    __ movq(r9, V8_UINT64_C(0x0000000000000188));  // expected result
+    __ movq(r9, uint64_t{0x0000000000000188});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ bzhil(r8, Operand(rsp, 0), rdx);
-    __ movq(r9, V8_UINT64_C(0x0000000000000188));  // expected result
+    __ movq(r9, uint64_t{0x0000000000000188});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     // mulx
-    __ movq(rdx, V8_UINT64_C(0x0000000000001000));
+    __ movq(rdx, uint64_t{0x0000000000001000});
 
     __ incq(rax);
     __ mulxq(r8, r9, rcx);
-    __ movq(rbx, V8_UINT64_C(0x0000000000000112));  // expected result
+    __ movq(rbx, uint64_t{0x0000000000000112});  // expected result
     __ cmpq(r8, rbx);
     __ j(not_equal, &exit);
-    __ movq(rbx, V8_UINT64_C(0x2334455667788000));  // expected result
+    __ movq(rbx, uint64_t{0x2334455667788000});  // expected result
     __ cmpq(r9, rbx);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ mulxq(r8, r9, Operand(rsp, 0));
-    __ movq(rbx, V8_UINT64_C(0x0000000000000112));  // expected result
+    __ movq(rbx, uint64_t{0x0000000000000112});  // expected result
     __ cmpq(r8, rbx);
     __ j(not_equal, &exit);
-    __ movq(rbx, V8_UINT64_C(0x2334455667788000));  // expected result
+    __ movq(rbx, uint64_t{0x2334455667788000});  // expected result
     __ cmpq(r9, rbx);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ mulxl(r8, r9, rcx);
-    __ movq(rbx, V8_UINT64_C(0x0000000000000556));  // expected result
+    __ movq(rbx, uint64_t{0x0000000000000556});  // expected result
     __ cmpq(r8, rbx);
     __ j(not_equal, &exit);
-    __ movq(rbx, V8_UINT64_C(0x0000000067788000));  // expected result
+    __ movq(rbx, uint64_t{0x0000000067788000});  // expected result
     __ cmpq(r9, rbx);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ mulxl(r8, r9, Operand(rsp, 0));
-    __ movq(rbx, V8_UINT64_C(0x0000000000000556));  // expected result
+    __ movq(rbx, uint64_t{0x0000000000000556});  // expected result
     __ cmpq(r8, rbx);
     __ j(not_equal, &exit);
-    __ movq(rbx, V8_UINT64_C(0x0000000067788000));  // expected result
+    __ movq(rbx, uint64_t{0x0000000067788000});  // expected result
     __ cmpq(r9, rbx);
     __ j(not_equal, &exit);
 
     // pdep
-    __ movq(rdx, V8_UINT64_C(0xfffffffffffffff0));
+    __ movq(rdx, uint64_t{0xFFFFFFFFFFFFFFF0});
 
     __ incq(rax);
     __ pdepq(r8, rdx, rcx);
-    __ movq(r9, V8_UINT64_C(0x1122334455667400));  // expected result
+    __ movq(r9, uint64_t{0x1122334455667400});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ pdepq(r8, rdx, Operand(rsp, 0));
-    __ movq(r9, V8_UINT64_C(0x1122334455667400));  // expected result
+    __ movq(r9, uint64_t{0x1122334455667400});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ pdepl(r8, rdx, rcx);
-    __ movq(r9, V8_UINT64_C(0x0000000055667400));  // expected result
+    __ movq(r9, uint64_t{0x0000000055667400});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ pdepl(r8, rdx, Operand(rsp, 0));
-    __ movq(r9, V8_UINT64_C(0x0000000055667400));  // expected result
+    __ movq(r9, uint64_t{0x0000000055667400});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     // pext
-    __ movq(rdx, V8_UINT64_C(0xfffffffffffffff0));
+    __ movq(rdx, uint64_t{0xFFFFFFFFFFFFFFF0});
 
     __ incq(rax);
     __ pextq(r8, rdx, rcx);
-    __ movq(r9, V8_UINT64_C(0x0000000003fffffe));  // expected result
+    __ movq(r9, uint64_t{0x0000000003FFFFFE});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ pextq(r8, rdx, Operand(rsp, 0));
-    __ movq(r9, V8_UINT64_C(0x0000000003fffffe));  // expected result
+    __ movq(r9, uint64_t{0x0000000003FFFFFE});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ pextl(r8, rdx, rcx);
-    __ movq(r9, V8_UINT64_C(0x000000000000fffe));  // expected result
+    __ movq(r9, uint64_t{0x000000000000FFFE});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ pextl(r8, rdx, Operand(rsp, 0));
-    __ movq(r9, V8_UINT64_C(0x000000000000fffe));  // expected result
+    __ movq(r9, uint64_t{0x000000000000FFFE});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     // sarx
-    __ movq(rdx, V8_UINT64_C(0x0000000000000004));
+    __ movq(rdx, uint64_t{0x0000000000000004});
 
     __ incq(rax);
     __ sarxq(r8, rcx, rdx);
-    __ movq(r9, V8_UINT64_C(0x0112233445566778));  // expected result
+    __ movq(r9, uint64_t{0x0112233445566778});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ sarxq(r8, Operand(rsp, 0), rdx);
-    __ movq(r9, V8_UINT64_C(0x0112233445566778));  // expected result
+    __ movq(r9, uint64_t{0x0112233445566778});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ sarxl(r8, rcx, rdx);
-    __ movq(r9, V8_UINT64_C(0x0000000005566778));  // expected result
+    __ movq(r9, uint64_t{0x0000000005566778});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ sarxl(r8, Operand(rsp, 0), rdx);
-    __ movq(r9, V8_UINT64_C(0x0000000005566778));  // expected result
+    __ movq(r9, uint64_t{0x0000000005566778});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     // shlx
-    __ movq(rdx, V8_UINT64_C(0x0000000000000004));
+    __ movq(rdx, uint64_t{0x0000000000000004});
 
     __ incq(rax);
     __ shlxq(r8, rcx, rdx);
-    __ movq(r9, V8_UINT64_C(0x1223344556677880));  // expected result
+    __ movq(r9, uint64_t{0x1223344556677880});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ shlxq(r8, Operand(rsp, 0), rdx);
-    __ movq(r9, V8_UINT64_C(0x1223344556677880));  // expected result
+    __ movq(r9, uint64_t{0x1223344556677880});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ shlxl(r8, rcx, rdx);
-    __ movq(r9, V8_UINT64_C(0x0000000056677880));  // expected result
+    __ movq(r9, uint64_t{0x0000000056677880});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ shlxl(r8, Operand(rsp, 0), rdx);
-    __ movq(r9, V8_UINT64_C(0x0000000056677880));  // expected result
+    __ movq(r9, uint64_t{0x0000000056677880});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     // shrx
-    __ movq(rdx, V8_UINT64_C(0x0000000000000004));
+    __ movq(rdx, uint64_t{0x0000000000000004});
 
     __ incq(rax);
     __ shrxq(r8, rcx, rdx);
-    __ movq(r9, V8_UINT64_C(0x0112233445566778));  // expected result
+    __ movq(r9, uint64_t{0x0112233445566778});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ shrxq(r8, Operand(rsp, 0), rdx);
-    __ movq(r9, V8_UINT64_C(0x0112233445566778));  // expected result
+    __ movq(r9, uint64_t{0x0112233445566778});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ shrxl(r8, rcx, rdx);
-    __ movq(r9, V8_UINT64_C(0x0000000005566778));  // expected result
+    __ movq(r9, uint64_t{0x0000000005566778});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ shrxl(r8, Operand(rsp, 0), rdx);
-    __ movq(r9, V8_UINT64_C(0x0000000005566778));  // expected result
+    __ movq(r9, uint64_t{0x0000000005566778});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     // rorx
     __ incq(rax);
     __ rorxq(r8, rcx, 0x4);
-    __ movq(r9, V8_UINT64_C(0x8112233445566778));  // expected result
+    __ movq(r9, uint64_t{0x8112233445566778});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ rorxq(r8, Operand(rsp, 0), 0x4);
-    __ movq(r9, V8_UINT64_C(0x8112233445566778));  // expected result
+    __ movq(r9, uint64_t{0x8112233445566778});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ rorxl(r8, rcx, 0x4);
-    __ movq(r9, V8_UINT64_C(0x0000000085566778));  // expected result
+    __ movq(r9, uint64_t{0x0000000085566778});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
     __ incq(rax);
     __ rorxl(r8, Operand(rsp, 0), 0x4);
-    __ movq(r9, V8_UINT64_C(0x0000000085566778));  // expected result
+    __ movq(r9, uint64_t{0x0000000085566778});  // expected result
     __ cmpq(r8, r9);
     __ j(not_equal, &exit);
 
@@ -2330,8 +2377,8 @@ TEST(AssemblerX64BMI2) {
   code->Print(os);
 #endif
 
-  F0 f = FUNCTION_CAST<F0>(code->entry());
-  CHECK_EQ(0, f());
+  auto f = GeneratedCode<F0>::FromCode(*code);
+  CHECK_EQ(0, f.Call());
 }
 
 
@@ -2374,9 +2421,9 @@ TEST(AssemblerX64JumpTables1) {
   code->Print(std::cout);
 #endif
 
-  F1 f = FUNCTION_CAST<F1>(code->entry());
+  auto f = GeneratedCode<F1>::FromCode(*code);
   for (int i = 0; i < kNumCases; ++i) {
-    int res = f(i);
+    int res = f.Call(i);
     PrintF("f(%d) = %d\n", i, res);
     CHECK_EQ(values[i], res);
   }
@@ -2423,9 +2470,9 @@ TEST(AssemblerX64JumpTables2) {
   code->Print(std::cout);
 #endif
 
-  F1 f = FUNCTION_CAST<F1>(code->entry());
+  auto f = GeneratedCode<F1>::FromCode(*code);
   for (int i = 0; i < kNumCases; ++i) {
-    int res = f(i);
+    int res = f.Call(i);
     PrintF("f(%d) = %d\n", i, res);
     CHECK_EQ(values[i], res);
   }
@@ -2444,11 +2491,13 @@ TEST(AssemblerX64PslldWithXmm15) {
 
   CodeDesc desc;
   masm.GetCode(CcTest::i_isolate(), &desc);
-  uint64_t result = FUNCTION_CAST<F5>(buffer)(V8_UINT64_C(0x1122334455667788));
-  CHECK_EQ(V8_UINT64_C(0x22446688aaccef10), result);
+  MakeAssemblerBufferExecutable(buffer, allocated);
+  auto f = GeneratedCode<F5>::FromAddress(CcTest::i_isolate(), buffer);
+  uint64_t result = f.Call(uint64_t{0x1122334455667788});
+  CHECK_EQ(uint64_t{0x22446688AACCEF10}, result);
 }
 
-typedef float (*F9)(float x, float y);
+typedef float(F9)(float x, float y);
 TEST(AssemblerX64vmovups) {
   CcTest::InitializeVM();
   if (!CpuFeatures::IsSupported(AVX)) return;
@@ -2480,8 +2529,8 @@ TEST(AssemblerX64vmovups) {
   code->Print(os);
 #endif
 
-  F9 f = FUNCTION_CAST<F9>(code->entry());
-  CHECK_EQ(-1.5, f(1.5, -1.5));
+  auto f = GeneratedCode<F9>::FromCode(*code);
+  CHECK_EQ(-1.5, f.Call(1.5, -1.5));
 }
 
 #undef __

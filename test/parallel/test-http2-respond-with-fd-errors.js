@@ -46,8 +46,8 @@ const tests = specificTests.concat(genericTests);
 
 let currentError;
 
-// mock respondFD because we only care about testing error handling
-Http2Stream.prototype.respondFD = () => currentError.ngError;
+// mock `respond` because we only care about testing error handling
+Http2Stream.prototype.respond = () => currentError.ngError;
 
 const server = http2.createServer();
 server.on('stream', common.mustCall((stream, headers) => {
@@ -88,7 +88,7 @@ function runTest(test) {
   req.on('error', common.expectsError({
     code: 'ERR_HTTP2_STREAM_ERROR',
     type: Error,
-    message: 'Stream closed with error code 2'
+    message: 'Stream closed with error code NGHTTP2_INTERNAL_ERROR'
   }));
 
   currentError = test;

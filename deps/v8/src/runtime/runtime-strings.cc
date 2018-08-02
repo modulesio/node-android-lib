@@ -216,35 +216,16 @@ RUNTIME_FUNCTION(Runtime_StringLastIndexOf) {
                              isolate->factory()->undefined_value());
 }
 
-RUNTIME_FUNCTION(Runtime_SubString) {
+RUNTIME_FUNCTION(Runtime_StringSubstring) {
   HandleScope scope(isolate);
   DCHECK_EQ(3, args.length());
-
   CONVERT_ARG_HANDLE_CHECKED(String, string, 0);
-  int start, end;
-  // We have a fast integer-only case here to avoid a conversion to double in
-  // the common case where from and to are Smis.
-  if (args[1]->IsSmi() && args[2]->IsSmi()) {
-    CONVERT_SMI_ARG_CHECKED(from_number, 1);
-    CONVERT_SMI_ARG_CHECKED(to_number, 2);
-    start = from_number;
-    end = to_number;
-  } else if (args[1]->IsNumber() && args[2]->IsNumber()) {
-    CONVERT_DOUBLE_ARG_CHECKED(from_number, 1);
-    CONVERT_DOUBLE_ARG_CHECKED(to_number, 2);
-    start = FastD2IChecked(from_number);
-    end = FastD2IChecked(to_number);
-  } else {
-    return isolate->ThrowIllegalOperation();
-  }
-  // The following condition is intentionally robust because the SubString
-  // builtin delegates here and we test this in
-  // cctest/test-strings/RobustSubStringStub.
-  if (end < start || start < 0 || end > string->length()) {
-    return isolate->ThrowIllegalOperation();
-  }
+  CONVERT_INT32_ARG_CHECKED(start, 1);
+  CONVERT_INT32_ARG_CHECKED(end, 2);
+  DCHECK_LE(0, start);
+  DCHECK_LE(start, end);
+  DCHECK_LE(end, string->length());
   isolate->counters()->sub_string_runtime()->Increment();
-
   return *isolate->factory()->NewSubString(string, start, end);
 }
 
@@ -490,7 +471,7 @@ static void JoinSparseArrayWithSeparator(FixedArray* elements,
   int last_array_index = static_cast<int>(array_length - 1);
   // Array length must be representable as a signed 32-bit number,
   // otherwise the total string length would have been too large.
-  DCHECK_LE(array_length, 0x7fffffff);  // Is int32_t.
+  DCHECK_LE(array_length, 0x7FFFFFFF);  // Is int32_t.
   int repeat = last_array_index - previous_separator_position;
   WriteRepeatToFlat<Char>(separator, buffer, cursor, repeat, separator_length);
   cursor += repeat * separator_length;
@@ -537,7 +518,7 @@ RUNTIME_FUNCTION(Runtime_SparseJoinWithSeparator) {
 
   int separator_length = separator->length();
   if (!overflow && separator_length > 0) {
-    if (array_length <= 0x7fffffffu) {
+    if (array_length <= 0x7FFFFFFFu) {
       int separator_count = static_cast<int>(array_length) - 1;
       int remaining_length = String::kMaxLength - string_length;
       if ((remaining_length / separator_length) >= separator_count) {
@@ -549,7 +530,7 @@ RUNTIME_FUNCTION(Runtime_SparseJoinWithSeparator) {
     } else {
       // Nonempty separator and at least 2^31-1 separators necessary
       // means that the string is too large to create.
-      STATIC_ASSERT(String::kMaxLength < 0x7fffffff);
+      STATIC_ASSERT(String::kMaxLength < 0x7FFFFFFF);
       overflow = true;
     }
   }
@@ -730,7 +711,7 @@ RUNTIME_FUNCTION(Runtime_StringCharFromCode) {
   DCHECK_EQ(1, args.length());
   if (args[0]->IsNumber()) {
     CONVERT_NUMBER_CHECKED(uint32_t, code, Uint32, args[0]);
-    code &= 0xffff;
+    code &= 0xFFFF;
     return *isolate->factory()->LookupSingleCharacterStringFromCode(code);
   }
   return isolate->heap()->empty_string();

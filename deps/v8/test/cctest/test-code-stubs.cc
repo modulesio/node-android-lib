@@ -34,7 +34,7 @@
 #include "src/base/platform/platform.h"
 #include "src/code-stubs.h"
 #include "src/double.h"
-#include "src/factory.h"
+#include "src/heap/factory.h"
 #include "src/macro-assembler.h"
 #include "src/objects-inl.h"
 #include "test/cctest/cctest.h"
@@ -193,7 +193,7 @@ TEST(CodeStubMajorKeys) {
 #define CHECK_STUB(NAME)                        \
   {                                             \
     HandleScope scope(isolate);                 \
-    NAME##Stub stub_impl(0xabcd, isolate);      \
+    NAME##Stub stub_impl(0xABCD, isolate);      \
     CodeStub* stub = &stub_impl;                \
     CHECK_EQ(stub->MajorKey(), CodeStub::NAME); \
   }

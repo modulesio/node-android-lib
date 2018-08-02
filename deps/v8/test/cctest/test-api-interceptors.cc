@@ -64,6 +64,14 @@ void EmptyInterceptorGetter(Local<Name> name,
 void EmptyInterceptorSetter(Local<Name> name, Local<Value> value,
                             const v8::PropertyCallbackInfo<v8::Value>& info) {}
 
+void EmptyInterceptorQuery(Local<Name> name,
+                           const v8::PropertyCallbackInfo<v8::Integer>& info) {}
+
+void EmptyInterceptorDeleter(
+    Local<Name> name, const v8::PropertyCallbackInfo<v8::Boolean>& info) {}
+
+void EmptyInterceptorEnumerator(
+    const v8::PropertyCallbackInfo<v8::Array>& info) {}
 
 void SimpleAccessorGetter(Local<String> name,
                           const v8::PropertyCallbackInfo<v8::Value>& info) {
@@ -98,10 +106,10 @@ void SymbolAccessorSetter(Local<Name> name, Local<Value> value,
   SimpleAccessorSetter(Local<String>::Cast(sym->Name()), value, info);
 }
 
-void StringInterceptorGetter(
-    Local<String> name,
-    const v8::PropertyCallbackInfo<v8::Value>&
-        info) {  // Intercept names that start with 'interceptor_'.
+void InterceptorGetter(Local<Name> generic_name,
+                       const v8::PropertyCallbackInfo<v8::Value>& info) {
+  if (generic_name->IsSymbol()) return;
+  Local<String> name = Local<String>::Cast(generic_name);
   String::Utf8Value utf8(info.GetIsolate(), name);
   char* name_str = *utf8;
   char prefix[] = "interceptor_";
@@ -117,9 +125,10 @@ void StringInterceptorGetter(
           .ToLocalChecked());
 }
 
-
-void StringInterceptorSetter(Local<String> name, Local<Value> value,
-                             const v8::PropertyCallbackInfo<v8::Value>& info) {
+void InterceptorSetter(Local<Name> generic_name, Local<Value> value,
+                       const v8::PropertyCallbackInfo<v8::Value>& info) {
+  if (generic_name->IsSymbol()) return;
+  Local<String> name = Local<String>::Cast(generic_name);
   // Intercept accesses that set certain integer values, for which the name does
   // not start with 'accessor_'.
   String::Utf8Value utf8(info.GetIsolate(), name);
@@ -138,18 +147,6 @@ void StringInterceptorSetter(Local<String> name, Local<Value> value,
     self->SetPrivate(context, symbol, value).FromJust();
     info.GetReturnValue().Set(value);
   }
-}
-
-void InterceptorGetter(Local<Name> generic_name,
-                       const v8::PropertyCallbackInfo<v8::Value>& info) {
-  if (generic_name->IsSymbol()) return;
-  StringInterceptorGetter(Local<String>::Cast(generic_name), info);
-}
-
-void InterceptorSetter(Local<Name> generic_name, Local<Value> value,
-                       const v8::PropertyCallbackInfo<v8::Value>& info) {
-  if (generic_name->IsSymbol()) return;
-  StringInterceptorSetter(Local<String>::Cast(generic_name), value, info);
 }
 
 void GenericInterceptorGetter(Local<Name> generic_name,
@@ -198,17 +195,18 @@ void AddAccessor(Local<FunctionTemplate> templ, Local<String> name,
   templ->PrototypeTemplate()->SetAccessor(name, getter, setter);
 }
 
-void AddInterceptor(Local<FunctionTemplate> templ,
-                    v8::NamedPropertyGetterCallback getter,
-                    v8::NamedPropertySetterCallback setter) {
-  templ->InstanceTemplate()->SetNamedPropertyHandler(getter, setter);
-}
-
-
 void AddAccessor(Local<FunctionTemplate> templ, Local<Name> name,
                  v8::AccessorNameGetterCallback getter,
                  v8::AccessorNameSetterCallback setter) {
   templ->PrototypeTemplate()->SetAccessor(name, getter, setter);
+}
+
+void AddStringOnlyInterceptor(Local<FunctionTemplate> templ,
+                              v8::GenericNamedPropertyGetterCallback getter,
+                              v8::GenericNamedPropertySetterCallback setter) {
+  templ->InstanceTemplate()->SetHandler(v8::NamedPropertyHandlerConfiguration(
+      getter, setter, nullptr, nullptr, nullptr, Local<v8::Value>(),
+      v8::PropertyHandlerFlags::kOnlyInterceptStrings));
 }
 
 void AddInterceptor(Local<FunctionTemplate> templ,
@@ -1517,7 +1515,7 @@ THREADED_TEST(LegacyInterceptorDoesNotSeeSymbols) {
 
   child->Inherit(parent);
   AddAccessor(parent, age, SymbolAccessorGetter, SymbolAccessorSetter);
-  AddInterceptor(child, StringInterceptorGetter, StringInterceptorSetter);
+  AddStringOnlyInterceptor(child, InterceptorGetter, InterceptorSetter);
 
   env->Global()
       ->Set(env.local(), v8_str("Child"),
@@ -2597,6 +2595,52 @@ static void InterceptorForHiddenProperties(
   interceptor_for_hidden_properties_called = true;
 }
 
+THREADED_TEST(NoSideEffectPropertyHandler) {
+  v8::Isolate* isolate = CcTest::isolate();
+  v8::HandleScope scope(isolate);
+  LocalContext context;
+
+  Local<ObjectTemplate> templ = ObjectTemplate::New(isolate);
+  templ->SetHandler(v8::NamedPropertyHandlerConfiguration(
+      EmptyInterceptorGetter, EmptyInterceptorSetter, EmptyInterceptorQuery,
+      EmptyInterceptorDeleter, EmptyInterceptorEnumerator));
+  v8::Local<v8::Object> object =
+      templ->NewInstance(context.local()).ToLocalChecked();
+  context->Global()->Set(context.local(), v8_str("obj"), object).FromJust();
+
+  CHECK(v8::debug::EvaluateGlobal(isolate, v8_str("obj.x"), true).IsEmpty());
+  CHECK(
+      v8::debug::EvaluateGlobal(isolate, v8_str("obj.x = 1"), true).IsEmpty());
+  CHECK(
+      v8::debug::EvaluateGlobal(isolate, v8_str("'x' in obj"), true).IsEmpty());
+  CHECK(v8::debug::EvaluateGlobal(isolate, v8_str("delete obj.x"), true)
+            .IsEmpty());
+  // Wrap the variable declaration since declaring globals is a side effect.
+  CHECK(v8::debug::EvaluateGlobal(
+            isolate, v8_str("(function() { for (var p in obj) ; })()"), true)
+            .IsEmpty());
+
+  // Side-effect-free version.
+  Local<ObjectTemplate> templ2 = ObjectTemplate::New(isolate);
+  templ2->SetHandler(v8::NamedPropertyHandlerConfiguration(
+      EmptyInterceptorGetter, EmptyInterceptorSetter, EmptyInterceptorQuery,
+      EmptyInterceptorDeleter, EmptyInterceptorEnumerator,
+      v8::Local<v8::Value>(), v8::PropertyHandlerFlags::kHasNoSideEffect));
+  v8::Local<v8::Object> object2 =
+      templ2->NewInstance(context.local()).ToLocalChecked();
+  context->Global()->Set(context.local(), v8_str("obj2"), object2).FromJust();
+
+  v8::debug::EvaluateGlobal(isolate, v8_str("obj2.x"), true).ToLocalChecked();
+  CHECK(
+      v8::debug::EvaluateGlobal(isolate, v8_str("obj2.x = 1"), true).IsEmpty());
+  v8::debug::EvaluateGlobal(isolate, v8_str("'x' in obj2"), true)
+      .ToLocalChecked();
+  CHECK(v8::debug::EvaluateGlobal(isolate, v8_str("delete obj2.x"), true)
+            .IsEmpty());
+  v8::debug::EvaluateGlobal(
+      isolate, v8_str("(function() { for (var p in obj2) ; })()"), true)
+      .ToLocalChecked();
+}
 
 THREADED_TEST(HiddenPropertiesWithInterceptors) {
   LocalContext context;
@@ -4387,7 +4431,7 @@ THREADED_TEST(Regress625155) {
   CompileRun(
       "Number.prototype.__proto__ = new Bug;"
       "var x;"
-      "x = 0xdead;"
+      "x = 0xDEAD;"
       "x.boom = 0;"
       "x = 's';"
       "x.boom = 0;"

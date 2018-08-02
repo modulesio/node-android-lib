@@ -136,16 +136,19 @@ ConversionResult convertUTF16ToUTF8(const UChar** sourceStart,
       result = targetExhausted;
       break;
     }
-    switch (bytesToWrite) {  // note: everything falls through.
+    switch (bytesToWrite) {
       case 4:
         *--target = static_cast<char>((ch | byteMark) & byteMask);
         ch >>= 6;
+        V8_FALLTHROUGH;
       case 3:
         *--target = static_cast<char>((ch | byteMark) & byteMask);
         ch >>= 6;
+        V8_FALLTHROUGH;
       case 2:
         *--target = static_cast<char>((ch | byteMark) & byteMask);
         ch >>= 6;
+        V8_FALLTHROUGH;
       case 1:
         *--target = static_cast<char>(ch | firstByteMark[bytesToWrite]);
     }
@@ -162,15 +165,15 @@ ConversionResult convertUTF16ToUTF8(const UChar** sourceStart,
  * @return TRUE or FALSE
  * @stable ICU 2.8
  */
-#define U_IS_BMP(c) ((uint32_t)(c) <= 0xffff)
+#define U_IS_BMP(c) ((uint32_t)(c) <= 0xFFFF)
 
 /**
- * Is this code point a supplementary code point (U+10000..U+10ffff)?
+ * Is this code point a supplementary code point (U+010000..U+10FFFF)?
  * @param c 32-bit code point
  * @return TRUE or FALSE
  * @stable ICU 2.8
  */
-#define U_IS_SUPPLEMENTARY(c) ((uint32_t)((c)-0x10000) <= 0xfffff)
+#define U_IS_SUPPLEMENTARY(c) ((uint32_t)((c)-0x010000) <= 0xFFFFF)
 
 /**
  * Is this code point a surrogate (U+d800..U+dfff)?
@@ -178,25 +181,25 @@ ConversionResult convertUTF16ToUTF8(const UChar** sourceStart,
  * @return TRUE or FALSE
  * @stable ICU 2.4
  */
-#define U_IS_SURROGATE(c) (((c)&0xfffff800) == 0xd800)
+#define U_IS_SURROGATE(c) (((c)&0xFFFFF800) == 0xD800)
 
 /**
- * Get the lead surrogate (0xd800..0xdbff) for a
- * supplementary code point (0x10000..0x10ffff).
- * @param supplementary 32-bit code point (U+10000..U+10ffff)
- * @return lead surrogate (U+d800..U+dbff) for supplementary
+ * Get the lead surrogate (0xD800..0xDBFF) for a
+ * supplementary code point (0x010000..0x10FFFF).
+ * @param supplementary 32-bit code point (U+010000..U+10FFFF)
+ * @return lead surrogate (U+D800..U+DBFF) for supplementary
  * @stable ICU 2.4
  */
-#define U16_LEAD(supplementary) (UChar)(((supplementary) >> 10) + 0xd7c0)
+#define U16_LEAD(supplementary) (UChar)(((supplementary) >> 10) + 0xD7C0)
 
 /**
- * Get the trail surrogate (0xdc00..0xdfff) for a
- * supplementary code point (0x10000..0x10ffff).
- * @param supplementary 32-bit code point (U+10000..U+10ffff)
- * @return trail surrogate (U+dc00..U+dfff) for supplementary
+ * Get the trail surrogate (0xDC00..0xDFFF) for a
+ * supplementary code point (0x010000..0x10FFFF).
+ * @param supplementary 32-bit code point (U+010000..U+10FFFF)
+ * @return trail surrogate (U+DC00..U+DFFF) for supplementary
  * @stable ICU 2.4
  */
-#define U16_TRAIL(supplementary) (UChar)(((supplementary)&0x3ff) | 0xdc00)
+#define U16_TRAIL(supplementary) (UChar)(((supplementary)&0x3FF) | 0xDC00)
 
 // This must be called with the length pre-determined by the first byte.
 // If presented with a length > 4, this returns false.  The Unicode
@@ -210,8 +213,10 @@ static bool isLegalUTF8(const unsigned char* source, int length) {
     // Everything else falls through when "true"...
     case 4:
       if ((a = (*--srcptr)) < 0x80 || a > 0xBF) return false;
+      V8_FALLTHROUGH;
     case 3:
       if ((a = (*--srcptr)) < 0x80 || a > 0xBF) return false;
+      V8_FALLTHROUGH;
     case 2:
       if ((a = (*--srcptr)) > 0xBF) return false;
 
@@ -232,6 +237,7 @@ static bool isLegalUTF8(const unsigned char* source, int length) {
         default:
           if (a < 0x80) return false;
       }
+      V8_FALLTHROUGH;
 
     case 1:
       if (*source >= 0x80 && *source < 0xC2) return false;
@@ -258,18 +264,23 @@ static inline UChar32 readUTF8Sequence(const char*& sequence, size_t length) {
     case 6:
       character += static_cast<unsigned char>(*sequence++);
       character <<= 6;
+      V8_FALLTHROUGH;
     case 5:
       character += static_cast<unsigned char>(*sequence++);
       character <<= 6;
+      V8_FALLTHROUGH;
     case 4:
       character += static_cast<unsigned char>(*sequence++);
       character <<= 6;
+      V8_FALLTHROUGH;
     case 3:
       character += static_cast<unsigned char>(*sequence++);
       character <<= 6;
+      V8_FALLTHROUGH;
     case 2:
       character += static_cast<unsigned char>(*sequence++);
       character <<= 6;
+      V8_FALLTHROUGH;
     case 1:
       character += static_cast<unsigned char>(*sequence++);
   }
@@ -329,7 +340,7 @@ ConversionResult convertUTF8ToUTF16(const char** sourceStart,
       }
       *target++ = U16_LEAD(character);
       *target++ = U16_TRAIL(character);
-      orAllData = 0xffff;
+      orAllData = 0xFFFF;
     } else {
       if (strict) {
         source -= utf8SequenceLength;  // return to the start
@@ -344,7 +355,7 @@ ConversionResult convertUTF8ToUTF16(const char** sourceStart,
   *sourceStart = source;
   *targetStart = target;
 
-  if (sourceAllASCII) *sourceAllASCII = !(orAllData & ~0x7f);
+  if (sourceAllASCII) *sourceAllASCII = !(orAllData & ~0x7F);
 
   return result;
 }
@@ -482,22 +493,39 @@ void String16Builder::append(const char* characters, size_t length) {
 }
 
 void String16Builder::appendNumber(int number) {
-  const int kBufferSize = 11;
+  constexpr int kBufferSize = 11;
   char buffer[kBufferSize];
   int chars = v8::base::OS::SNPrintF(buffer, kBufferSize, "%d", number);
-  DCHECK_GT(kBufferSize, chars);
+  DCHECK_LE(0, chars);
   m_buffer.insert(m_buffer.end(), buffer, buffer + chars);
 }
 
 void String16Builder::appendNumber(size_t number) {
-  const int kBufferSize = 20;
+  constexpr int kBufferSize = 20;
   char buffer[kBufferSize];
 #if !defined(_WIN32) && !defined(_WIN64)
   int chars = v8::base::OS::SNPrintF(buffer, kBufferSize, "%zu", number);
 #else
   int chars = v8::base::OS::SNPrintF(buffer, kBufferSize, "%Iu", number);
 #endif
-  DCHECK_GT(kBufferSize, chars);
+  DCHECK_LE(0, chars);
+  m_buffer.insert(m_buffer.end(), buffer, buffer + chars);
+}
+
+void String16Builder::appendUnsignedAsHex(uint64_t number) {
+  constexpr int kBufferSize = 17;
+  char buffer[kBufferSize];
+  int chars =
+      v8::base::OS::SNPrintF(buffer, kBufferSize, "%016" PRIx64, number);
+  DCHECK_LE(0, chars);
+  m_buffer.insert(m_buffer.end(), buffer, buffer + chars);
+}
+
+void String16Builder::appendUnsignedAsHex(uint32_t number) {
+  constexpr int kBufferSize = 9;
+  char buffer[kBufferSize];
+  int chars = v8::base::OS::SNPrintF(buffer, kBufferSize, "%08" PRIx32, number);
+  DCHECK_LE(0, chars);
   m_buffer.insert(m_buffer.end(), buffer, buffer + chars);
 }
 

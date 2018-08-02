@@ -31,7 +31,7 @@
 
 #include "src/base/platform/platform.h"
 #include "src/code-stubs.h"
-#include "src/factory.h"
+#include "src/heap/factory.h"
 #include "src/macro-assembler.h"
 #include "src/mips/constants-mips.h"
 #include "src/objects-inl.h"
@@ -56,7 +56,7 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
 
   DoubleToIStub stub(isolate, destination_reg);
 
-  byte* start = stub.GetCode()->instruction_start();
+  byte* start = stub.GetCode()->raw_instruction_start();
 
   // Save callee save registers.
   __ MultiPush(kCalleeSaved | ra.bit());
@@ -102,7 +102,7 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
       Register reg = Register::from_code(reg_num);
       if (reg != destination_reg) {
         __ lw(at, MemOperand(sp, 0));
-        __ Assert(eq, kRegisterWasClobbered, reg, Operand(at));
+        __ Assert(eq, AbortReason::kRegisterWasClobbered, reg, Operand(at));
         __ Addu(sp, sp, Operand(kPointerSize));
       }
     }
@@ -128,7 +128,8 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
 
   CodeDesc desc;
   masm.GetCode(isolate, &desc);
-  Assembler::FlushICache(isolate, buffer, allocated);
+  MakeAssemblerBufferExecutable(buffer, allocated);
+  Assembler::FlushICache(buffer, allocated);
   return (reinterpret_cast<ConvertDToIFunc>(
       reinterpret_cast<intptr_t>(buffer)));
 }

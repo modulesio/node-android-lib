@@ -26,6 +26,7 @@ namespace internal {
   V(CodeDataContainer)     \
   V(ConsString)            \
   V(DataObject)            \
+  V(FeedbackCell)          \
   V(FeedbackVector)        \
   V(FixedArray)            \
   V(FixedDoubleArray)      \
@@ -37,7 +38,6 @@ namespace internal {
   V(JSFunction)            \
   V(JSObject)              \
   V(JSObjectFast)          \
-  V(JSRegExp)              \
   V(JSWeakCollection)      \
   V(Map)                   \
   V(NativeContext)         \
@@ -55,7 +55,9 @@ namespace internal {
   V(Symbol)                \
   V(ThinString)            \
   V(TransitionArray)       \
-  V(WeakCell)
+  V(WasmInstanceObject)    \
+  V(WeakCell)              \
+  V(WeakFixedArray)
 
 // For data objects, JS objects and structs along with generic visitor which
 // can visit object of any size we provide visitors specialized by
@@ -115,11 +117,12 @@ typedef std::vector<Handle<Map>> MapHandles;
 //      |          |   - is_undetectable (bit 4)                 |
 //      |          |   - is_access_check_needed (bit 5)          |
 //      |          |   - is_constructor (bit 6)                  |
-//      |          |   - unused (bit 7)                          |
+//      |          |   - has_prototype_slot (bit 7)              |
 //      +----------+---------------------------------------------+
 //      | Byte     | [bit_field2]                                |
 //      |          |   - is_extensible (bit 0)                   |
-//      |          |   - is_prototype_map (bit 2)                |
+//      |          |   - is_prototype_map (bit 1)                |
+//      |          |   - is_in_retained_map_list (bit 2)         |
 //      |          |   - elements_kind (bits 3..7)               |
 // +----+----------+---------------------------------------------+
 // | Int           | [bit_field3]                                |
@@ -194,8 +197,7 @@ class Map : public HeapObject {
   inline InterceptorInfo* GetIndexedInterceptor();
 
   // Instance type.
-  inline InstanceType instance_type() const;
-  inline void set_instance_type(InstanceType value);
+  DECL_PRIMITIVE_ACCESSORS(instance_type, InstanceType)
 
   // Returns the size of the used in-object area including object header
   // (only used for JSObject in fast mode, for the other kinds of objects it
@@ -214,50 +216,69 @@ class Map : public HeapObject {
   inline void AccountAddedOutOfObjectPropertyField(
       int unused_in_property_array);
 
+  //
   // Bit field.
-  inline byte bit_field() const;
-  inline void set_bit_field(byte value);
+  //
+  DECL_PRIMITIVE_ACCESSORS(bit_field, byte)
 
+// Bit positions for |bit_field|.
+#define MAP_BIT_FIELD_FIELDS(V, _)          \
+  V(HasNonInstancePrototypeBit, bool, 1, _) \
+  V(IsCallableBit, bool, 1, _)              \
+  V(HasNamedInterceptorBit, bool, 1, _)     \
+  V(HasIndexedInterceptorBit, bool, 1, _)   \
+  V(IsUndetectableBit, bool, 1, _)          \
+  V(IsAccessCheckNeededBit, bool, 1, _)     \
+  V(IsConstructorBit, bool, 1, _)           \
+  V(HasPrototypeSlotBit, bool, 1, _)
+
+  DEFINE_BIT_FIELDS(MAP_BIT_FIELD_FIELDS)
+#undef MAP_BIT_FIELD_FIELDS
+
+  //
   // Bit field 2.
-  inline byte bit_field2() const;
-  inline void set_bit_field2(byte value);
+  //
+  DECL_PRIMITIVE_ACCESSORS(bit_field2, byte)
 
+// Bit positions for |bit_field2|.
+#define MAP_BIT_FIELD2_FIELDS(V, _)     \
+  V(IsExtensibleBit, bool, 1, _)        \
+  V(IsPrototypeMapBit, bool, 1, _)      \
+  V(IsInRetainedMapListBit, bool, 1, _) \
+  V(ElementsKindBits, ElementsKind, 5, _)
+
+  DEFINE_BIT_FIELDS(MAP_BIT_FIELD2_FIELDS)
+#undef MAP_BIT_FIELD2_FIELDS
+
+  //
   // Bit field 3.
-  inline uint32_t bit_field3() const;
-  inline void set_bit_field3(uint32_t bits);
+  //
+  DECL_PRIMITIVE_ACCESSORS(bit_field3, uint32_t)
 
-  class EnumLengthBits : public BitField<int, 0, kDescriptorIndexBitCount> {
-  };  // NOLINT
-  class NumberOfOwnDescriptorsBits
-      : public BitField<int, kDescriptorIndexBitCount,
-                        kDescriptorIndexBitCount> {};  // NOLINT
-  STATIC_ASSERT(kDescriptorIndexBitCount + kDescriptorIndexBitCount == 20);
-  class DictionaryMap : public BitField<bool, 20, 1> {};
-  class OwnsDescriptors : public BitField<bool, 21, 1> {};
-  class HasHiddenPrototype : public BitField<bool, 22, 1> {};
-  class Deprecated : public BitField<bool, 23, 1> {};
-  class IsUnstable : public BitField<bool, 24, 1> {};
-  class IsMigrationTarget : public BitField<bool, 25, 1> {};
-  class ImmutablePrototype : public BitField<bool, 26, 1> {};
-  class NewTargetIsBase : public BitField<bool, 27, 1> {};
-  class MayHaveInterestingSymbols : public BitField<bool, 28, 1> {};
+// Bit positions for |bit_field3|.
+#define MAP_BIT_FIELD3_FIELDS(V, _)                               \
+  V(EnumLengthBits, int, kDescriptorIndexBitCount, _)             \
+  V(NumberOfOwnDescriptorsBits, int, kDescriptorIndexBitCount, _) \
+  V(IsDictionaryMapBit, bool, 1, _)                               \
+  V(OwnsDescriptorsBit, bool, 1, _)                               \
+  V(HasHiddenPrototypeBit, bool, 1, _)                            \
+  V(IsDeprecatedBit, bool, 1, _)                                  \
+  V(IsUnstableBit, bool, 1, _)                                    \
+  V(IsMigrationTargetBit, bool, 1, _)                             \
+  V(IsImmutablePrototypeBit, bool, 1, _)                          \
+  V(NewTargetIsBaseBit, bool, 1, _)                               \
+  V(MayHaveInterestingSymbolsBit, bool, 1, _)                     \
+  V(ConstructionCounterBits, int, 3, _)
+
+  DEFINE_BIT_FIELDS(MAP_BIT_FIELD3_FIELDS)
+#undef MAP_BIT_FIELD3_FIELDS
 
   STATIC_ASSERT(NumberOfOwnDescriptorsBits::kMax >= kMaxNumberOfDescriptors);
 
-  // Keep this bit field at the very end for better code in
-  // Builtins::kJSConstructStubGeneric stub.
-  // This counter is used for in-object slack tracking.
-  // The in-object slack tracking is considered enabled when the counter is
-  // non zero. The counter only has a valid count for initial maps. For
-  // transitioned maps only kNoSlackTracking has a meaning, namely that inobject
-  // slack tracking already finished for the transition tree. Any other value
-  // indicates that either inobject slack tracking is still in progress, or that
-  // the map isn't part of the transition tree anymore.
-  class ConstructionCounter : public BitField<int, 29, 3> {};
   static const int kSlackTrackingCounterStart = 7;
   static const int kSlackTrackingCounterEnd = 1;
   static const int kNoSlackTracking = 0;
-  STATIC_ASSERT(kSlackTrackingCounterStart <= ConstructionCounter::kMax);
+  STATIC_ASSERT(kSlackTrackingCounterStart <= ConstructionCounterBits::kMax);
 
   // Inobject slack tracking is the way to reclaim unused inobject space.
   //
@@ -310,8 +331,7 @@ class Map : public HeapObject {
   // property is set to a value that is not a JSObject, the prototype
   // property will not be used to create instances of the function.
   // See ECMA-262, 13.2.2.
-  inline void set_non_instance_prototype(bool value);
-  inline bool has_non_instance_prototype() const;
+  DECL_BOOLEAN_ACCESSORS(has_non_instance_prototype)
 
   // Tells whether the instance has a [[Construct]] internal method.
   // This property is implemented according to ES6, section 7.2.4.
@@ -329,12 +349,10 @@ class Map : public HeapObject {
   DECL_BOOLEAN_ACCESSORS(has_hidden_prototype)
 
   // Records and queries whether the instance has a named interceptor.
-  inline void set_has_named_interceptor();
-  inline bool has_named_interceptor() const;
+  DECL_BOOLEAN_ACCESSORS(has_named_interceptor)
 
   // Records and queries whether the instance has an indexed interceptor.
-  inline void set_has_indexed_interceptor();
-  inline bool has_indexed_interceptor() const;
+  DECL_BOOLEAN_ACCESSORS(has_indexed_interceptor)
 
   // Tells whether the instance is undetectable.
   // An undetectable object is a special class of JSObject: 'typeof' operator
@@ -342,21 +360,22 @@ class Map : public HeapObject {
   // a normal JS object.  It is useful for implementing undetectable
   // document.all in Firefox & Safari.
   // See https://bugzilla.mozilla.org/show_bug.cgi?id=248549.
-  inline void set_is_undetectable();
-  inline bool is_undetectable() const;
+  DECL_BOOLEAN_ACCESSORS(is_undetectable)
 
   // Tells whether the instance has a [[Call]] internal method.
   // This property is implemented according to ES6, section 7.2.3.
-  inline void set_is_callable();
-  inline bool is_callable() const;
+  DECL_BOOLEAN_ACCESSORS(is_callable)
 
   DECL_BOOLEAN_ACCESSORS(new_target_is_base)
   DECL_BOOLEAN_ACCESSORS(is_extensible)
   DECL_BOOLEAN_ACCESSORS(is_prototype_map)
   inline bool is_abandoned_prototype_map() const;
 
-  inline void set_elements_kind(ElementsKind elements_kind);
-  inline ElementsKind elements_kind() const;
+  // Whether the instance has been added to the retained map list by
+  // Heap::AddRetainedMap.
+  DECL_BOOLEAN_ACCESSORS(is_in_retained_map_list)
+
+  DECL_PRIMITIVE_ACCESSORS(elements_kind, ElementsKind)
 
   // Tells whether the instance has fast elements that are only Smis.
   inline bool has_fast_smi_elements() const;
@@ -386,7 +405,7 @@ class Map : public HeapObject {
   // [raw_transitions]: Provides access to the transitions storage field.
   // Don't call set_raw_transitions() directly to overwrite transitions, use
   // the TransitionArray::ReplaceTransitions() wrapper instead!
-  DECL_ACCESSORS(raw_transitions, Object)
+  DECL_ACCESSORS(raw_transitions, MaybeObject)
   // [prototype_info]: Per-prototype metadata. Aliased with transitions
   // (which prototype maps don't have).
   DECL_ACCESSORS(prototype_info, Object)
@@ -401,13 +420,17 @@ class Map : public HeapObject {
                                           Isolate* isolate);
 
   // [prototype chain validity cell]: Associated with a prototype object,
-  // stored in that object's map's PrototypeInfo, indicates that prototype
-  // chains through this object are currently valid. The cell will be
-  // invalidated and replaced when the prototype chain changes.
-  static Handle<Cell> GetOrCreatePrototypeChainValidityCell(Handle<Map> map,
-                                                            Isolate* isolate);
+  // stored in that object's map, indicates that prototype chains through this
+  // object are currently valid. The cell will be invalidated and replaced when
+  // the prototype chain changes. When there's nothing to guard (for example,
+  // when direct prototype is null or Proxy) this function returns Smi with
+  // |kPrototypeChainValid| sentinel value.
+  static Handle<Object> GetOrCreatePrototypeChainValidityCell(Handle<Map> map,
+                                                              Isolate* isolate);
   static const int kPrototypeChainValid = 0;
   static const int kPrototypeChainInvalid = 1;
+
+  static bool IsPrototypeChainInvalidated(Map* map);
 
   // Return the map of the root of object's prototype chain.
   Map* GetPrototypeChainRootMap(Isolate* isolate) const;
@@ -443,7 +466,7 @@ class Map : public HeapObject {
                               int* old_number_of_fields) const;
   // TODO(ishell): moveit!
   static Handle<Map> GeneralizeAllFields(Handle<Map> map);
-  MUST_USE_RESULT static Handle<FieldType> GeneralizeFieldType(
+  V8_WARN_UNUSED_RESULT static Handle<FieldType> GeneralizeFieldType(
       Representation rep1, Handle<FieldType> type1, Representation rep2,
       Handle<FieldType> type2, Isolate* isolate);
   static void GeneralizeField(Handle<Map> map, int modify_index,
@@ -489,13 +512,11 @@ class Map : public HeapObject {
   // normalized objects, ie objects for which HasFastProperties returns false).
   // A map can never be used for both dictionary mode and fast mode JSObjects.
   // False by default and for HeapObjects that are not JSObjects.
-  inline void set_dictionary_map(bool value);
-  inline bool is_dictionary_map() const;
+  DECL_BOOLEAN_ACCESSORS(is_dictionary_map)
 
   // Tells whether the instance needs security checks when accessing its
   // properties.
-  inline void set_is_access_check_needed(bool access_check_needed);
-  inline bool is_access_check_needed() const;
+  DECL_BOOLEAN_ACCESSORS(is_access_check_needed)
 
   // [prototype]: implicit prototype object.
   DECL_ACCESSORS(prototype, Object)
@@ -546,6 +567,24 @@ class Map : public HeapObject {
   // [weak cell cache]: cache that stores a weak cell pointing to this map.
   DECL_ACCESSORS(weak_cell_cache, Object)
 
+  // [prototype_validity_cell]: Cell containing the validity bit for prototype
+  // chains or Smi(0) if uninitialized.
+  // The meaning of this validity cell is different for prototype maps and
+  // non-prototype maps.
+  // For prototype maps the validity bit "guards" modifications of prototype
+  // chains going through this object. When a prototype object changes, both its
+  // own validity cell and those of all "downstream" prototypes are invalidated;
+  // handlers for a given receiver embed the currently valid cell for that
+  // receiver's prototype during their creation and check it on execution.
+  // For non-prototype maps which are used as transitioning store handlers this
+  // field contains the validity cell which guards modifications of this map's
+  // prototype.
+  DECL_ACCESSORS(prototype_validity_cell, Object)
+
+  // Returns true if prototype validity cell value represents "valid" prototype
+  // chain state.
+  inline bool IsPrototypeValidityCellValid() const;
+
   inline PropertyDetails GetLastDescriptorDetails() const;
 
   inline int LastAdded() const;
@@ -563,22 +602,31 @@ class Map : public HeapObject {
   inline void SetEnumLength(int length);
 
   DECL_BOOLEAN_ACCESSORS(owns_descriptors)
+
   inline void mark_unstable();
   inline bool is_stable() const;
-  inline void set_migration_target(bool value);
-  inline bool is_migration_target() const;
-  inline void set_immutable_proto(bool value);
-  inline bool is_immutable_proto() const;
+
+  DECL_BOOLEAN_ACCESSORS(is_migration_target)
+
+  DECL_BOOLEAN_ACCESSORS(is_immutable_proto)
+
+  // This counter is used for in-object slack tracking.
+  // The in-object slack tracking is considered enabled when the counter is
+  // non zero. The counter only has a valid count for initial maps. For
+  // transitioned maps only kNoSlackTracking has a meaning, namely that inobject
+  // slack tracking already finished for the transition tree. Any other value
+  // indicates that either inobject slack tracking is still in progress, or that
+  // the map isn't part of the transition tree anymore.
   DECL_INT_ACCESSORS(construction_counter)
-  inline void deprecate();
-  inline bool is_deprecated() const;
+
+  DECL_BOOLEAN_ACCESSORS(is_deprecated)
   inline bool CanBeDeprecated() const;
   // Returns a non-deprecated version of the input. If the input was not
   // deprecated, it is directly returned. Otherwise, the non-deprecated version
   // is found by re-transitioning from the root of the transition tree using the
   // descriptor array of the map. Returns MaybeHandle<Map>() if no updated map
   // is found.
-  static MaybeHandle<Map> TryUpdate(Handle<Map> map) WARN_UNUSED_RESULT;
+  static MaybeHandle<Map> TryUpdate(Handle<Map> map) V8_WARN_UNUSED_RESULT;
 
   // Returns a non-deprecated version of the input. This method may deprecate
   // existing maps along the way if encodings conflict. Not for use while
@@ -600,12 +648,12 @@ class Map : public HeapObject {
   static Handle<Object> WrapFieldType(Handle<FieldType> type);
   static FieldType* UnwrapFieldType(Object* wrapped_type);
 
-  MUST_USE_RESULT static MaybeHandle<Map> CopyWithField(
+  V8_WARN_UNUSED_RESULT static MaybeHandle<Map> CopyWithField(
       Handle<Map> map, Handle<Name> name, Handle<FieldType> type,
       PropertyAttributes attributes, PropertyConstness constness,
       Representation representation, TransitionFlag flag);
 
-  MUST_USE_RESULT static MaybeHandle<Map> CopyWithConstant(
+  V8_WARN_UNUSED_RESULT static MaybeHandle<Map> CopyWithConstant(
       Handle<Map> map, Handle<Name> name, Handle<Object> constant,
       PropertyAttributes attributes, TransitionFlag flag);
 
@@ -633,10 +681,12 @@ class Map : public HeapObject {
   // transitions to avoid an explosion in the number of maps for objects used as
   // dictionaries.
   inline bool TooManyFastProperties(StoreFromKeyed store_mode) const;
-  static Handle<Map> TransitionToDataProperty(
-      Handle<Map> map, Handle<Name> name, Handle<Object> value,
-      PropertyAttributes attributes, PropertyConstness constness,
-      StoreFromKeyed store_mode, bool* created_new_map);
+  static Handle<Map> TransitionToDataProperty(Handle<Map> map,
+                                              Handle<Name> name,
+                                              Handle<Object> value,
+                                              PropertyAttributes attributes,
+                                              PropertyConstness constness,
+                                              StoreFromKeyed store_mode);
   static Handle<Map> TransitionToAccessorProperty(
       Isolate* isolate, Handle<Map> map, Handle<Name> name, int descriptor,
       Handle<Object> getter, Handle<Object> setter,
@@ -692,6 +742,7 @@ class Map : public HeapObject {
   inline bool IsPrimitiveMap() const;
   inline bool IsJSReceiverMap() const;
   inline bool IsJSObjectMap() const;
+  inline bool IsJSPromiseMap() const;
   inline bool IsJSArrayMap() const;
   inline bool IsJSFunctionMap() const;
   inline bool IsStringMap() const;
@@ -750,6 +801,7 @@ class Map : public HeapObject {
   V(kLayoutDescriptorOffset, FLAG_unbox_double_fields ? kPointerSize : 0)   \
   V(kDependentCodeOffset, kPointerSize)                                     \
   V(kWeakCellCacheOffset, kPointerSize)                                     \
+  V(kPrototypeValidityCellOffset, kPointerSize)                             \
   V(kPointerFieldsEndOffset, 0)                                             \
   /* Total size. */                                                         \
   V(kSize, 0)
@@ -759,25 +811,7 @@ class Map : public HeapObject {
 
   STATIC_ASSERT(kInstanceTypeOffset == Internals::kMapInstanceTypeOffset);
 
-  // Bit positions for bit field.
-  static const int kHasNonInstancePrototype = 0;
-  static const int kIsCallable = 1;
-  static const int kHasNamedInterceptor = 2;
-  static const int kHasIndexedInterceptor = 3;
-  static const int kIsUndetectable = 4;
-  static const int kIsAccessCheckNeeded = 5;
-  static const int kIsConstructor = 6;
-  static const int kHasPrototypeSlot = 7;
-
-  // Bit positions for bit field 2
-  static const int kIsExtensible = 0;
-  // Bit 1 is free.
-  class IsPrototypeMapBits : public BitField<bool, 2, 1> {};
-  class ElementsKindBits : public BitField<ElementsKind, 3, 5> {};
-
-  typedef FixedBodyDescriptor<kPointerFieldsBeginOffset,
-                              kPointerFieldsEndOffset, kSize>
-      BodyDescriptor;
+  class BodyDescriptor;
 
   // Compares this map to another to see if they describe equivalent objects.
   // If |mode| is set to CLEAR_INOBJECT_PROPERTIES, |other| is treated as if
@@ -866,7 +900,7 @@ class Map : public HeapObject {
                                            Handle<DescriptorArray> descriptors,
                                            Descriptor* descriptor, int index,
                                            TransitionFlag flag);
-  static MUST_USE_RESULT MaybeHandle<Map> TryReconfigureExistingProperty(
+  static V8_WARN_UNUSED_RESULT MaybeHandle<Map> TryReconfigureExistingProperty(
       Handle<Map> map, int descriptor, PropertyKind kind,
       PropertyAttributes attributes, const char** reason);
 
@@ -918,8 +952,8 @@ class NormalizedMapCache : public FixedArray {
  public:
   static Handle<NormalizedMapCache> New(Isolate* isolate);
 
-  MUST_USE_RESULT MaybeHandle<Map> Get(Handle<Map> fast_map,
-                                       PropertyNormalizationMode mode);
+  V8_WARN_UNUSED_RESULT MaybeHandle<Map> Get(Handle<Map> fast_map,
+                                             PropertyNormalizationMode mode);
   void Set(Handle<Map> fast_map, Handle<Map> normalized_map,
            Handle<WeakCell> normalized_map_weak_cell);
 

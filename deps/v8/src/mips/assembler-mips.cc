@@ -79,6 +79,9 @@ void CpuFeatures::ProbeImpl(bool cross_compile) {
 #if defined(_MIPS_ARCH_MIPS32R6)
   // FP64 mode is implied on r6.
   supported_ |= 1u << FP64FPU;
+#if defined(_MIPS_MSA)
+  supported_ |= 1u << MIPS_SIMD;
+#endif
 #endif
 #if defined(FPU_MODE_FP64)
   supported_ |= 1u << FP64FPU;
@@ -91,7 +94,13 @@ void CpuFeatures::ProbeImpl(bool cross_compile) {
   if (cpu.is_fp64_mode()) supported_ |= 1u << FP64FPU;
 #elif defined(FPU_MODE_FP64)
   supported_ |= 1u << FP64FPU;
+#if defined(_MIPS_ARCH_MIPS32R6)
+#if defined(_MIPS_MSA)
+  supported_ |= 1u << MIPS_SIMD;
+#else
   if (cpu.has_msa()) supported_ |= 1u << MIPS_SIMD;
+#endif
+#endif
 #endif
 #if defined(_MIPS_ARCH_MIPS32RX)
   if (cpu.architecture() == 6) {
@@ -174,10 +183,8 @@ Register ToRegister(int num) {
 // -----------------------------------------------------------------------------
 // Implementation of RelocInfo.
 
-const int RelocInfo::kApplyMask = RelocInfo::kCodeTargetMask |
-                                  1 << RelocInfo::INTERNAL_REFERENCE |
+const int RelocInfo::kApplyMask = 1 << RelocInfo::INTERNAL_REFERENCE |
                                   1 << RelocInfo::INTERNAL_REFERENCE_ENCODED;
-
 
 bool RelocInfo::IsCodedSpecially() {
   // The deserializer needs to know whether a pointer is specially coded.  Being
@@ -192,28 +199,28 @@ bool RelocInfo::IsInConstantPool() {
 }
 
 Address RelocInfo::embedded_address() const {
-  return Assembler::target_address_at(pc_, host_);
+  return Assembler::target_address_at(pc_, constant_pool_);
 }
 
 uint32_t RelocInfo::embedded_size() const {
-  return reinterpret_cast<uint32_t>(Assembler::target_address_at(pc_, host_));
+  return reinterpret_cast<uint32_t>(
+      Assembler::target_address_at(pc_, constant_pool_));
 }
 
-void RelocInfo::set_embedded_address(Isolate* isolate, Address address,
+void RelocInfo::set_embedded_address(Address address,
                                      ICacheFlushMode flush_mode) {
-  Assembler::set_target_address_at(isolate, pc_, host_, address, flush_mode);
+  Assembler::set_target_address_at(pc_, constant_pool_, address, flush_mode);
 }
 
-void RelocInfo::set_embedded_size(Isolate* isolate, uint32_t size,
-                                  ICacheFlushMode flush_mode) {
-  Assembler::set_target_address_at(isolate, pc_, host_,
+void RelocInfo::set_embedded_size(uint32_t size, ICacheFlushMode flush_mode) {
+  Assembler::set_target_address_at(pc_, constant_pool_,
                                    reinterpret_cast<Address>(size), flush_mode);
 }
 
-void RelocInfo::set_js_to_wasm_address(Isolate* isolate, Address address,
+void RelocInfo::set_js_to_wasm_address(Address address,
                                        ICacheFlushMode icache_flush_mode) {
   DCHECK_EQ(rmode_, JS_TO_WASM_CALL);
-  set_embedded_address(isolate, address, icache_flush_mode);
+  set_embedded_address(address, icache_flush_mode);
 }
 
 Address RelocInfo::js_to_wasm_address() const {
@@ -270,8 +277,7 @@ void Assembler::AllocateAndInstallRequestedHeapObjects(Isolate* isolate) {
         break;
     }
     Address pc = buffer_ + request.offset();
-    set_target_value_at(isolate, pc,
-                        reinterpret_cast<uint32_t>(object.location()));
+    set_target_value_at(pc, reinterpret_cast<uint32_t>(object.location()));
   }
 }
 
@@ -308,7 +314,7 @@ const Instr kSwRegFpNegOffsetPattern =
     SW | (fp.code() << kRsShift) | (kNegOffset & kImm16Mask);  // NOLINT
 // A mask for the Rt register for push, pop, lw, sw instructions.
 const Instr kRtMask = kRtFieldMask;
-const Instr kLwSwInstrTypeMask = 0xffe00000;
+const Instr kLwSwInstrTypeMask = 0xFFE00000;
 const Instr kLwSwInstrArgumentMask  = ~kLwSwInstrTypeMask;
 const Instr kLwSwOffsetMask = kImm16Mask;
 
@@ -788,7 +794,7 @@ uint32_t Assembler::CreateTargetAddress(Instr instr_lui, Instr instr_jic) {
 // Use just lui and jic instructions. Insert lower part of the target address in
 // jic offset part. Since jic sign-extends offset and then add it with register,
 // before that addition, difference between upper part of the target address and
-// upper part of the sign-extended offset (0xffff or 0x0000), will be inserted
+// upper part of the sign-extended offset (0xFFFF or 0x0000), will be inserted
 // in jic register with lui instruction.
 void Assembler::UnpackTargetAddress(uint32_t address, int16_t& lui_offset,
                                     int16_t& jic_offset) {
@@ -2001,7 +2007,7 @@ void Assembler::AdjustBaseAndOffset(MemOperand& src,
   // about -64KB to about +64KB, allowing further addition of 4 when accessing
   // 64-bit variables with two 32-bit accesses.
   constexpr int32_t kMinOffsetForSimpleAdjustment =
-      0x7ff8;  // Max int16_t that's a multiple of 8.
+      0x7FF8;  // Max int16_t that's a multiple of 8.
   constexpr int32_t kMaxOffsetForSimpleAdjustment =
       2 * kMinOffsetForSimpleAdjustment;
   if (0 <= src.offset() && src.offset() <= kMaxOffsetForSimpleAdjustment) {
@@ -2237,7 +2243,7 @@ void Assembler::aluipc(Register rs, int16_t imm16) {
 
 // Break / Trap instructions.
 void Assembler::break_(uint32_t code, bool break_as_stop) {
-  DCHECK_EQ(code & ~0xfffff, 0);
+  DCHECK_EQ(code & ~0xFFFFF, 0);
   // We need to invalidate breaks that could be stops as well because the
   // simulator expects a char pointer after the stop instruction.
   // See constants-mips.h for explanation.
@@ -2487,15 +2493,6 @@ void Assembler::ctc1(Register rt, FPUControlRegister fs) {
 
 void Assembler::cfc1(Register rt, FPUControlRegister fs) {
   GenInstrRegister(COP1, CFC1, rt, fs);
-}
-
-
-void Assembler::DoubleAsTwoUInt32(double d, uint32_t* lo, uint32_t* hi) {
-  uint64_t i;
-  memcpy(&i, &d, 8);
-
-  *lo = i & 0xffffffff;
-  *hi = i >> 32;
 }
 
 
@@ -3039,14 +3036,14 @@ void Assembler::cmp_d(FPUCondition cond, FPURegister fd, FPURegister fs,
 void Assembler::bc1eqz(int16_t offset, FPURegister ft) {
   DCHECK(IsMipsArchVariant(kMips32r6));
   Instr instr = COP1 | BC1EQZ | ft.code() << kFtShift | (offset & kImm16Mask);
-  emit(instr);
+  emit(instr, CompactBranchType::COMPACT_BRANCH);
 }
 
 
 void Assembler::bc1nez(int16_t offset, FPURegister ft) {
   DCHECK(IsMipsArchVariant(kMips32r6));
   Instr instr = COP1 | BC1NEZ | ft.code() << kFtShift | (offset & kImm16Mask);
-  emit(instr);
+  emit(instr, CompactBranchType::COMPACT_BRANCH);
 }
 
 
@@ -3084,16 +3081,20 @@ void Assembler::fcmp(FPURegister src1, const double src2,
 
 
 void Assembler::bc1f(int16_t offset, uint16_t cc) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   DCHECK(is_uint3(cc));
   Instr instr = COP1 | BC1 | cc << 18 | 0 << 16 | (offset & kImm16Mask);
   emit(instr);
+  BlockTrampolinePoolFor(1);  // For associated delay slot.
 }
 
 
 void Assembler::bc1t(int16_t offset, uint16_t cc) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   DCHECK(is_uint3(cc));
   Instr instr = COP1 | BC1 | cc << 18 | 1 << 16 | (offset & kImm16Mask);
   emit(instr);
+  BlockTrampolinePoolFor(1);  // For associated delay slot.
 }
 
 // ---------- MSA instructions ------------
@@ -3667,7 +3668,7 @@ void Assembler::GrowBuffer() {
   // Some internal data structures overflow for very large buffers,
   // they must ensure that kMaximalBufferSize is not too large.
   if (desc.buffer_size > kMaximalBufferSize) {
-    V8::FatalProcessOutOfMemory("Assembler::GrowBuffer");
+    V8::FatalProcessOutOfMemory(nullptr, "Assembler::GrowBuffer");
   }
 
   // Set up new buffer.
@@ -3887,11 +3888,8 @@ void Assembler::QuietNaN(HeapObject* object) {
 // There is an optimization below, which emits a nop when the address
 // fits in just 16 bits. This is unlikely to help, and should be benchmarked,
 // and possibly removed.
-void Assembler::set_target_value_at(Isolate* isolate, Address pc,
-                                    uint32_t target,
+void Assembler::set_target_value_at(Address pc, uint32_t target,
                                     ICacheFlushMode icache_flush_mode) {
-  DCHECK_IMPLIES(isolate == nullptr, icache_flush_mode == SKIP_ICACHE_FLUSH);
-
   Instr instr2 = instr_at(pc + kInstrSize);
   uint32_t rt_code = GetRtField(instr2);
   uint32_t* p = reinterpret_cast<uint32_t*>(pc);
@@ -3922,7 +3920,7 @@ void Assembler::set_target_value_at(Isolate* isolate, Address pc,
   }
 
   if (icache_flush_mode != SKIP_ICACHE_FLUSH) {
-    Assembler::FlushICache(isolate, pc, 2 * sizeof(int32_t));
+    Assembler::FlushICache(pc, 2 * sizeof(int32_t));
   }
 }
 

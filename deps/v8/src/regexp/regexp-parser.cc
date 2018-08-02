@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "src/char-predicates-inl.h"
-#include "src/factory.h"
+#include "src/heap/factory.h"
 #include "src/isolate.h"
 #include "src/objects-inl.h"
 #include "src/ostreams.h"
@@ -280,12 +280,12 @@ RegExpTree* RegExpParser::ParseDisjunction() {
           // Everything.
           CharacterRange::AddClassEscape('*', ranges, false, zone());
         } else {
-          // Everything except \x0a, \x0d, \u2028 and \u2029
+          // Everything except \x0A, \x0D, \u2028 and \u2029
           CharacterRange::AddClassEscape('.', ranges, false, zone());
         }
 
         RegExpCharacterClass* cc =
-            new (zone()) RegExpCharacterClass(ranges, builder->flags());
+            new (zone()) RegExpCharacterClass(zone(), ranges, builder->flags());
         builder->AddCharacterClass(cc);
         break;
       }
@@ -332,8 +332,8 @@ RegExpTree* RegExpParser::ParseDisjunction() {
                 new (zone()) ZoneList<CharacterRange>(2, zone());
             CharacterRange::AddClassEscape(
                 c, ranges, unicode() && builder->ignore_case(), zone());
-            RegExpCharacterClass* cc =
-                new (zone()) RegExpCharacterClass(ranges, builder->flags());
+            RegExpCharacterClass* cc = new (zone())
+                RegExpCharacterClass(zone(), ranges, builder->flags());
             builder->AddCharacterClass(cc);
             break;
           }
@@ -348,8 +348,8 @@ RegExpTree* RegExpParser::ParseDisjunction() {
                 if (!ParsePropertyClass(ranges, p == 'P')) {
                   return ReportError(CStrVector("Invalid property name"));
                 }
-                RegExpCharacterClass* cc =
-                    new (zone()) RegExpCharacterClass(ranges, builder->flags());
+                RegExpCharacterClass* cc = new (zone())
+                    RegExpCharacterClass(zone(), ranges, builder->flags());
                 builder->AddCharacterClass(cc);
               } else {
                 // With /u, no identity escapes except for syntax characters
@@ -399,8 +399,8 @@ RegExpTree* RegExpParser::ParseDisjunction() {
               Advance(2);
               break;
             }
+            V8_FALLTHROUGH;
           }
-          // Fall through.
           case '0': {
             Advance();
             if (unicode() && Next() >= '0' && Next() <= '9') {
@@ -451,7 +451,7 @@ RegExpTree* RegExpParser::ParseDisjunction() {
               builder->AddCharacter('\\');
             } else {
               Advance(2);
-              builder->AddCharacter(controlLetter & 0x1f);
+              builder->AddCharacter(controlLetter & 0x1F);
             }
             break;
           }
@@ -493,7 +493,7 @@ RegExpTree* RegExpParser::ParseDisjunction() {
               ParseNamedBackReference(builder, state CHECK_FAILED);
               break;
             }
-          // Fall through.
+            V8_FALLTHROUGH;
           default:
             Advance();
             // With /u, no identity escapes except for syntax characters
@@ -511,14 +511,14 @@ RegExpTree* RegExpParser::ParseDisjunction() {
         int dummy;
         bool parsed = ParseIntervalQuantifier(&dummy, &dummy CHECK_FAILED);
         if (parsed) return ReportError(CStrVector("Nothing to repeat"));
-        // Fall through.
+        V8_FALLTHROUGH;
       }
       case '}':
       case ']':
         if (unicode()) {
           return ReportError(CStrVector("Lone quantifier brackets"));
         }
-      // Fall through.
+        V8_FALLTHROUGH;
       default:
         builder->AddUnicodeCharacter(current());
         Advance();
@@ -684,7 +684,7 @@ RegExpParser::RegExpParserState* RegExpParser::ParseOpenParenthesis(
           Advance();
           break;
         }
-      // Fall through.
+        V8_FALLTHROUGH;
       default:
         ReportError(CStrVector("Invalid group"));
         return nullptr;
@@ -1145,7 +1145,7 @@ bool RegExpParser::ParseUnicodeEscape(uc32* value) {
   if (current() == '{' && unicode()) {
     int start = position();
     Advance();
-    if (ParseUnlimitedLengthHexNumber(0x10ffff, value)) {
+    if (ParseUnlimitedLengthHexNumber(0x10FFFF, value)) {
       if (current() == '}') {
         Advance();
         return true;
@@ -1255,10 +1255,15 @@ bool LookupSpecialPropertyValueName(const char* name,
                                     ZoneList<CharacterRange>* result,
                                     bool negate, Zone* zone) {
   if (NameEquals(name, "Any")) {
-    if (!negate) result->Add(CharacterRange::Everything(), zone);
+    if (negate) {
+      // Leave the list of character ranges empty, since the negation of 'Any'
+      // is the empty set.
+    } else {
+      result->Add(CharacterRange::Everything(), zone);
+    }
   } else if (NameEquals(name, "ASCII")) {
     result->Add(negate ? CharacterRange::Range(0x80, String::kMaxCodePoint)
-                       : CharacterRange::Range(0x0, 0x7f),
+                       : CharacterRange::Range(0x0, 0x7F),
                 zone);
   } else if (NameEquals(name, "Assigned")) {
     return LookupPropertyValueName(UCHAR_GENERAL_CATEGORY, "Unassigned",
@@ -1486,8 +1491,8 @@ uc32 RegExpParser::ParseClassCharacterEscape() {
       if (letter >= 'A' && letter <= 'Z') {
         Advance(2);
         // Control letters mapped to ASCII control characters in the range
-        // 0x00-0x1f.
-        return controlLetter & 0x1f;
+        // 0x00-0x1F.
+        return controlLetter & 0x1F;
       }
       if (unicode()) {
         // With /u, invalid escapes are not treated as identity escapes.
@@ -1497,7 +1502,7 @@ uc32 RegExpParser::ParseClassCharacterEscape() {
       if ((controlLetter >= '0' && controlLetter <= '9') ||
           controlLetter == '_') {
         Advance(2);
-        return controlLetter & 0x1f;
+        return controlLetter & 0x1F;
       }
       // We match JSC in reading the backslash as a literal
       // character instead of as starting an escape.
@@ -1510,7 +1515,7 @@ uc32 RegExpParser::ParseClassCharacterEscape() {
         Advance();
         return 0;
       }
-    // Fall through.
+      V8_FALLTHROUGH;
     case '1':
     case '2':
     case '3':
@@ -1672,14 +1677,10 @@ RegExpTree* RegExpParser::ParseCharacterClass(const RegExpBuilder* builder) {
     return ReportError(CStrVector(kUnterminated));
   }
   Advance();
-  if (ranges->length() == 0) {
-    ranges->Add(CharacterRange::Everything(), zone());
-    is_negated = !is_negated;
-  }
   RegExpCharacterClass::CharacterClassFlags character_class_flags;
   if (is_negated) character_class_flags = RegExpCharacterClass::NEGATED;
-  return new (zone())
-      RegExpCharacterClass(ranges, builder->flags(), character_class_flags);
+  return new (zone()) RegExpCharacterClass(zone(), ranges, builder->flags(),
+                                           character_class_flags);
 }
 
 
@@ -1853,7 +1854,8 @@ void RegExpBuilder::AddCharacterClass(RegExpCharacterClass* cc) {
 
 void RegExpBuilder::AddCharacterClassForDesugaring(uc32 c) {
   AddTerm(new (zone()) RegExpCharacterClass(
-      CharacterRange::List(zone(), CharacterRange::Singleton(c)), flags_));
+      zone(), CharacterRange::List(zone(), CharacterRange::Singleton(c)),
+      flags_));
 }
 
 
@@ -1984,8 +1986,14 @@ bool RegExpBuilder::AddQuantifierToAtom(
   } else if (terms_.length() > 0) {
     DCHECK(last_added_ == ADD_ATOM);
     atom = terms_.RemoveLast();
-    // With /u, lookarounds are not quantifiable.
-    if (unicode() && atom->IsLookaround()) return false;
+    if (atom->IsLookaround()) {
+      // With /u, lookarounds are not quantifiable.
+      if (unicode()) return false;
+      // Lookbehinds are not quantifiable.
+      if (atom->AsLookaround()->type() == RegExpLookaround::LOOKBEHIND) {
+        return false;
+      }
+    }
     if (atom->max_match() == 0) {
       // Guaranteed to only match an empty string.
       LAST(ADD_TERM);

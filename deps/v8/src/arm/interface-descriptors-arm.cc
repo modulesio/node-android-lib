@@ -45,8 +45,6 @@ const Register LoadDescriptor::SlotRegister() { return r0; }
 
 const Register LoadWithVectorDescriptor::VectorRegister() { return r3; }
 
-const Register LoadICProtoArrayDescriptor::HandlerRegister() { return r4; }
-
 const Register StoreDescriptor::ReceiverRegister() { return r1; }
 const Register StoreDescriptor::NameRegister() { return r2; }
 const Register StoreDescriptor::ValueRegister() { return r0; }
@@ -71,12 +69,6 @@ const Register MathPowIntegerDescriptor::exponent() {
 const Register GrowArrayElementsDescriptor::ObjectRegister() { return r0; }
 const Register GrowArrayElementsDescriptor::KeyRegister() { return r3; }
 
-
-void FastNewClosureDescriptor::InitializePlatformSpecific(
-    CallInterfaceDescriptorData* data) {
-  Register registers[] = {r1, r2, r3};
-  data->InitializePlatformSpecific(arraysize(registers), registers);
-}
 
 // static
 const Register TypeConversionDescriptor::ArgumentRegister() { return r0; }
@@ -204,6 +196,11 @@ void TransitionElementsKindDescriptor::InitializePlatformSpecific(
   data->InitializePlatformSpecific(arraysize(registers), registers);
 }
 
+void AbortJSDescriptor::InitializePlatformSpecific(
+    CallInterfaceDescriptorData* data) {
+  Register registers[] = {r1};
+  data->InitializePlatformSpecific(arraysize(registers), registers);
+}
 
 void AllocateHeapNumberDescriptor::InitializePlatformSpecific(
     CallInterfaceDescriptorData* data) {

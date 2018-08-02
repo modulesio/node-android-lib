@@ -31,7 +31,7 @@
 
 #include "src/base/platform/platform.h"
 #include "src/code-stubs.h"
-#include "src/factory.h"
+#include "src/heap/factory.h"
 #include "src/macro-assembler.h"
 #include "src/objects-inl.h"
 #include "src/register-configuration.h"
@@ -54,7 +54,7 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
                       v8::internal::CodeObjectRequired::kYes);
 
   DoubleToIStub stub(isolate, destination_reg);
-  byte* start = stub.GetCode()->instruction_start();
+  byte* start = stub.GetCode()->raw_instruction_start();
 
   __ pushq(rbx);
   __ pushq(rcx);
@@ -89,7 +89,7 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
         Register::from_code(config->GetAllocatableGeneralCode(reg_num));
     if (reg != rsp && reg != rbp && reg != destination_reg) {
       __ cmpq(reg, MemOperand(rsp, 0));
-      __ Assert(equal, kRegisterWasClobbered);
+      __ Assert(equal, AbortReason::kRegisterWasClobbered);
       __ addq(rsp, Immediate(kPointerSize));
     }
   }
@@ -106,6 +106,7 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
 
   CodeDesc desc;
   masm.GetCode(isolate, &desc);
+  MakeAssemblerBufferExecutable(buffer, allocated);
   return reinterpret_cast<ConvertDToIFunc>(
       reinterpret_cast<intptr_t>(buffer));
 }

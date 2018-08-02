@@ -24,10 +24,10 @@ ScriptContextTable* ScriptContextTable::cast(Object* context) {
   return reinterpret_cast<ScriptContextTable*>(context);
 }
 
-int ScriptContextTable::used() const { return Smi::ToInt(get(kUsedSlot)); }
+int ScriptContextTable::used() const { return Smi::ToInt(get(kUsedSlotIndex)); }
 
 void ScriptContextTable::set_used(int used) {
-  set(kUsedSlot, Smi::FromInt(used));
+  set(kUsedSlotIndex, Smi::FromInt(used));
 }
 
 
@@ -36,7 +36,7 @@ Handle<Context> ScriptContextTable::GetContext(Handle<ScriptContextTable> table,
                                                int i) {
   DCHECK(i < table->used());
   return Handle<Context>::cast(
-      FixedArray::get(*table, i + kFirstContextSlot, table->GetIsolate()));
+      FixedArray::get(*table, i + kFirstContextSlotIndex, table->GetIsolate()));
 }
 
 
@@ -80,48 +80,39 @@ void Context::set_native_context(Context* context) {
 }
 
 bool Context::IsNativeContext() const {
-  Map* map = this->map();
-  return map == map->GetHeap()->native_context_map();
+  return map()->instance_type() == NATIVE_CONTEXT_TYPE;
 }
 
 bool Context::IsFunctionContext() const {
-  Map* map = this->map();
-  return map == map->GetHeap()->function_context_map();
+  return map()->instance_type() == FUNCTION_CONTEXT_TYPE;
 }
 
 bool Context::IsCatchContext() const {
-  Map* map = this->map();
-  return map == map->GetHeap()->catch_context_map();
+  return map()->instance_type() == CATCH_CONTEXT_TYPE;
 }
 
 bool Context::IsWithContext() const {
-  Map* map = this->map();
-  return map == map->GetHeap()->with_context_map();
+  return map()->instance_type() == WITH_CONTEXT_TYPE;
 }
 
 bool Context::IsDebugEvaluateContext() const {
-  Map* map = this->map();
-  return map == map->GetHeap()->debug_evaluate_context_map();
+  return map()->instance_type() == DEBUG_EVALUATE_CONTEXT_TYPE;
 }
 
 bool Context::IsBlockContext() const {
-  Map* map = this->map();
-  return map == map->GetHeap()->block_context_map();
+  return map()->instance_type() == BLOCK_CONTEXT_TYPE;
 }
 
 bool Context::IsModuleContext() const {
-  Map* map = this->map();
-  return map == map->GetHeap()->module_context_map();
+  return map()->instance_type() == MODULE_CONTEXT_TYPE;
 }
 
 bool Context::IsEvalContext() const {
-  Map* map = this->map();
-  return map == map->GetHeap()->eval_context_map();
+  return map()->instance_type() == EVAL_CONTEXT_TYPE;
 }
 
 bool Context::IsScriptContext() const {
-  Map* map = this->map();
-  return map == map->GetHeap()->script_context_map();
+  return map()->instance_type() == SCRIPT_CONTEXT_TYPE;
 }
 
 bool Context::HasSameSecurityTokenAs(Context* that) const {

@@ -2,14 +2,10 @@
 // Flags: --no-force-async-hooks-checks --expose-internals
 const common = require('../common');
 
-const async_hooks = require('internal/async_hooks');
-const internal = require('internal/process/next_tick');
+if (!common.isMainThread)
+  common.skip('Workers don\'t inherit per-env state like the check flag');
 
-// Using undefined as the triggerAsyncId.
-// Ref: https://github.com/nodejs/node/issues/14386
-// Ref: https://github.com/nodejs/node/issues/14381
-// Ref: https://github.com/nodejs/node/issues/14368
-internal.nextTick(undefined, common.mustCall());
+const async_hooks = require('internal/async_hooks');
 
 // Negative asyncIds and invalid type name
 async_hooks.emitInit(-1, null, -1, {});

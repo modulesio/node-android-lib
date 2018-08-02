@@ -6,7 +6,7 @@
 
 #include "src/arguments.h"
 #include "src/elements.h"
-#include "src/factory.h"
+#include "src/heap/factory.h"
 #include "src/isolate-inl.h"
 #include "src/objects-inl.h"
 
@@ -37,14 +37,6 @@ RUNTIME_FUNCTION(Runtime_JSProxyGetTarget) {
   return proxy->target();
 }
 
-
-RUNTIME_FUNCTION(Runtime_JSProxyRevoke) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(1, args.length());
-  CONVERT_ARG_HANDLE_CHECKED(JSProxy, proxy, 0);
-  JSProxy::Revoke(proxy);
-  return isolate->heap()->undefined_value();
-}
 
 RUNTIME_FUNCTION(Runtime_GetPropertyWithReceiver) {
   HandleScope scope(isolate);

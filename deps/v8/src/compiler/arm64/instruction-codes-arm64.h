@@ -67,6 +67,8 @@ namespace compiler {
   V(Arm64Mov32)                    \
   V(Arm64Sxtb32)                   \
   V(Arm64Sxth32)                   \
+  V(Arm64Sxtb)                     \
+  V(Arm64Sxth)                     \
   V(Arm64Sxtw)                     \
   V(Arm64Sbfx32)                   \
   V(Arm64Ubfx)                     \
@@ -79,11 +81,10 @@ namespace compiler {
   V(Arm64TestAndBranch)            \
   V(Arm64CompareAndBranch32)       \
   V(Arm64CompareAndBranch)         \
-  V(Arm64ClaimCSP)                 \
-  V(Arm64ClaimJSSP)                \
-  V(Arm64PokeCSP)                  \
-  V(Arm64PokeJSSP)                 \
+  V(Arm64Claim)                    \
+  V(Arm64Poke)                     \
   V(Arm64PokePair)                 \
+  V(Arm64Peek)                     \
   V(Arm64Float32Cmp)               \
   V(Arm64Float32Add)               \
   V(Arm64Float32Sub)               \
@@ -156,6 +157,7 @@ namespace compiler {
   V(Arm64StrW)                     \
   V(Arm64Ldr)                      \
   V(Arm64Str)                      \
+  V(Arm64DsbIsb)                   \
   V(Arm64F32x4Splat)               \
   V(Arm64F32x4ExtractLane)         \
   V(Arm64F32x4ReplaceLane)         \
@@ -298,7 +300,27 @@ namespace compiler {
   V(Arm64S1x8AnyTrue)              \
   V(Arm64S1x8AllTrue)              \
   V(Arm64S1x16AnyTrue)             \
-  V(Arm64S1x16AllTrue)
+  V(Arm64S1x16AllTrue)             \
+  V(Arm64Word64AtomicAddUint8)     \
+  V(Arm64Word64AtomicAddUint16)    \
+  V(Arm64Word64AtomicAddUint32)    \
+  V(Arm64Word64AtomicAddUint64)    \
+  V(Arm64Word64AtomicSubUint8)     \
+  V(Arm64Word64AtomicSubUint16)    \
+  V(Arm64Word64AtomicSubUint32)    \
+  V(Arm64Word64AtomicSubUint64)    \
+  V(Arm64Word64AtomicAndUint8)     \
+  V(Arm64Word64AtomicAndUint16)    \
+  V(Arm64Word64AtomicAndUint32)    \
+  V(Arm64Word64AtomicAndUint64)    \
+  V(Arm64Word64AtomicOrUint8)      \
+  V(Arm64Word64AtomicOrUint16)     \
+  V(Arm64Word64AtomicOrUint32)     \
+  V(Arm64Word64AtomicOrUint64)     \
+  V(Arm64Word64AtomicXorUint8)     \
+  V(Arm64Word64AtomicXorUint16)    \
+  V(Arm64Word64AtomicXorUint32)    \
+  V(Arm64Word64AtomicXorUint64)
 
 // Addressing modes represent the "shape" of inputs to an instruction.
 // Many instructions support multiple addressing modes. Addressing modes
@@ -325,8 +347,6 @@ namespace compiler {
   V(Operand2_R_SXTB)  /* %r0 SXTB (signed extend byte) */       \
   V(Operand2_R_SXTH)  /* %r0 SXTH (signed extend halfword) */   \
   V(Operand2_R_SXTW)  /* %r0 SXTW (signed extend word) */
-
-enum ResetJSSPAfterCall { kNoResetJSSP, kResetJSSP };
 
 }  // namespace compiler
 }  // namespace internal

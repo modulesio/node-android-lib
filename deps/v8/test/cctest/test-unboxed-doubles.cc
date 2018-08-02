@@ -11,9 +11,9 @@
 #include "src/api.h"
 #include "src/compilation-cache.h"
 #include "src/execution.h"
-#include "src/factory.h"
 #include "src/field-type.h"
 #include "src/global-handles.h"
+#include "src/heap/factory.h"
 #include "src/heap/incremental-marking.h"
 #include "src/heap/spaces.h"
 #include "src/ic/ic.h"
@@ -1519,7 +1519,7 @@ static void TestIncrementalWriteBarrier(Handle<Map> map, Handle<Map> new_map,
   // barrier.
   JSObject::MigrateToMap(obj, new_map);
 
-  uint64_t boom_value = UINT64_C(0xbaad0176a37c28e1);
+  uint64_t boom_value = UINT64_C(0xBAAD0176A37C28E1);
 
   FieldIndex double_field_index =
       FieldIndex::ForDescriptor(*new_map, double_descriptor);

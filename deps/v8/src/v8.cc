@@ -19,6 +19,7 @@
 #include "src/objects-inl.h"
 #include "src/profiler/heap-profiler.h"
 #include "src/runtime-profiler.h"
+#include "src/simulator.h"
 #include "src/snapshot/natives.h"
 #include "src/snapshot/snapshot.h"
 #include "src/tracing/tracing-category-observer.h"
@@ -42,10 +43,12 @@ bool V8::Initialize() {
 
 
 void V8::TearDown() {
+#if defined(USE_SIMULATOR)
+  Simulator::GlobalTearDown();
+#endif
   Bootstrapper::TearDownExtensions();
   ElementsAccessor::TearDown();
   RegisteredExtension::UnregisterAll();
-  Isolate::GlobalTearDown();
   sampler::Sampler::TearDown();
   FlagList::ResetAllFlags();  // Frees memory held by string arguments.
 }
@@ -65,14 +68,18 @@ void V8::InitializeOncePerProcessImpl() {
     FLAG_max_semi_space_size = 1;
   }
 
-  base::OS::Initialize(FLAG_random_seed, FLAG_hard_abort, FLAG_gc_fake_mmap);
+  base::OS::Initialize(FLAG_hard_abort, FLAG_gc_fake_mmap);
+
+  if (FLAG_random_seed) SetRandomMmapSeed(FLAG_random_seed);
 
   Isolate::InitializeOncePerProcess();
 
+#if defined(USE_SIMULATOR)
+  Simulator::InitializeOncePerProcess();
+#endif
   sampler::Sampler::SetUp();
   CpuFeatures::Probe(false);
   ElementsAccessor::InitializeOncePerProcess();
-  SetUpJSCallerSavedCodeData();
   ExternalReference::SetUp();
   Bootstrapper::InitializeOncePerProcess();
 }
@@ -116,7 +123,7 @@ void V8::SetNativesBlob(StartupData* natives_blob) {
 #ifdef V8_USE_EXTERNAL_STARTUP_DATA
   base::CallOnce(&init_natives_once, &SetNativesFromFile, natives_blob);
 #else
-  CHECK(false);
+  UNREACHABLE();
 #endif
 }
 
@@ -125,7 +132,7 @@ void V8::SetSnapshotBlob(StartupData* snapshot_blob) {
 #ifdef V8_USE_EXTERNAL_STARTUP_DATA
   base::CallOnce(&init_snapshot_once, &SetSnapshotFromFile, snapshot_blob);
 #else
-  CHECK(false);
+  UNREACHABLE();
 #endif
 }
 }  // namespace internal

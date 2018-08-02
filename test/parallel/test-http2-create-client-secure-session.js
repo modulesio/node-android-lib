@@ -21,7 +21,7 @@ function onStream(stream, headers) {
   const socket = stream.session[kSocket];
 
   assert(stream.session.encrypted);
-  assert(stream.session.alpnProtocol, 'h2');
+  assert.strictEqual(stream.session.alpnProtocol, 'h2');
   const originSet = stream.session.originSet;
   assert(Array.isArray(originSet));
   assert.strictEqual(originSet[0],
@@ -62,7 +62,7 @@ function verifySecureSession(key, cert, ca, opts) {
     req.on('response', common.mustCall((headers) => {
       assert.strictEqual(headers[':status'], 200);
       assert.strictEqual(headers['content-type'], 'application/json');
-      assert(headers['date']);
+      assert(headers.date);
     }));
 
     let data = '';

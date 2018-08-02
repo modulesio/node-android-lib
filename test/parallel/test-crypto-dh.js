@@ -49,14 +49,14 @@ assert.strictEqual(dh2.verifyError, 0);
   () => { },
   /abc/,
   {}
-].forEach((i) => {
+].forEach((input) => {
   common.expectsError(
-    () => crypto.createDiffieHellman(i),
+    () => crypto.createDiffieHellman(input),
     {
       code: 'ERR_INVALID_ARG_TYPE',
       type: TypeError,
       message: 'The "sizeOrKey" argument must be one of type number, string, ' +
-               'Buffer, TypedArray, or DataView'
+               `Buffer, TypedArray, or DataView. Received type ${typeof input}`
     }
   );
 });
@@ -371,9 +371,7 @@ if (availableCurves.has('prime256v1') && availableHashes.has('sha256')) {
     'AwEHoUQDQgAEurOxfSxmqIRYzJVagdZfMMSjRNNhB8i3mXyIMq704m2m52FdfKZ2\n' +
     'pQhByd5eyj3lgZ7m7jbchtdgyOF8Io/1ng==\n' +
     '-----END EC PRIVATE KEY-----';
-  assert.doesNotThrow(() => {
-    crypto.createSign('SHA256').sign(ecPrivateKey);
-  });
+  crypto.createSign('SHA256').sign(ecPrivateKey);
 }
 
 // invalid test: curve argument is undefined
@@ -382,5 +380,6 @@ common.expectsError(
   {
     code: 'ERR_INVALID_ARG_TYPE',
     type: TypeError,
-    message: 'The "curve" argument must be of type string'
+    message: 'The "curve" argument must be of type string. ' +
+             'Received type undefined'
   });

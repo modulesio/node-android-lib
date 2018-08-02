@@ -47,6 +47,26 @@ namespace internal {
 static void DummyStaticFunction(Object* result) {
 }
 
+void Disassemble(FILE* f, byte* begin, byte* end) {
+  disasm::NameConverter converter;
+  disasm::Disassembler d(converter);
+  for (byte* pc = begin; pc < end;) {
+    v8::internal::EmbeddedVector<char, 128> buffer;
+    buffer[0] = '\0';
+    byte* prev_pc = pc;
+    pc += d.InstructionDecodeForTesting(buffer, pc);
+    fprintf(f, "%p", static_cast<void*>(prev_pc));
+    fprintf(f, "    ");
+
+    for (byte* bp = prev_pc; bp < pc; bp++) {
+      fprintf(f, "%02x", *bp);
+    }
+    for (int i = 6 - static_cast<int>(pc - prev_pc); i >= 0; i--) {
+      fprintf(f, "  ");
+    }
+    fprintf(f, "  %s\n", buffer.start());
+  }
+}
 
 TEST(DisasmX64) {
   CcTest::InitializeVM();
@@ -386,6 +406,10 @@ TEST(DisasmX64) {
     __ cvtsd2ss(xmm0, xmm1);
     __ cvtsd2ss(xmm0, Operand(rbx, rcx, times_4, 10000));
     __ movaps(xmm0, xmm1);
+    __ movdqa(xmm0, Operand(rsp, 12));
+    __ movdqa(Operand(rsp, 12), xmm0);
+    __ movdqu(xmm0, Operand(rsp, 12));
+    __ movdqu(Operand(rsp, 12), xmm0);
     __ shufps(xmm0, xmm9, 0x0);
 
     // logic operation
@@ -409,6 +433,8 @@ TEST(DisasmX64) {
     __ maxss(xmm1, Operand(rbx, rcx, times_4, 10000));
     __ minss(xmm1, xmm0);
     __ minss(xmm1, Operand(rbx, rcx, times_4, 10000));
+    __ sqrtss(xmm1, xmm0);
+    __ sqrtss(xmm1, Operand(rbx, rcx, times_4, 10000));
     __ addps(xmm1, xmm0);
     __ addps(xmm1, Operand(rbx, rcx, times_4, 10000));
     __ subps(xmm1, xmm0);
@@ -450,6 +476,8 @@ TEST(DisasmX64) {
     __ minsd(xmm1, Operand(rbx, rcx, times_4, 10000));
     __ maxsd(xmm1, xmm0);
     __ maxsd(xmm1, Operand(rbx, rcx, times_4, 10000));
+    __ sqrtsd(xmm1, xmm0);
+    __ sqrtsd(xmm1, Operand(rbx, rcx, times_4, 10000));
     __ ucomisd(xmm0, xmm1);
 
     __ andpd(xmm0, xmm1);
@@ -504,6 +532,8 @@ TEST(DisasmX64) {
   {
     if (CpuFeatures::IsSupported(SSE3)) {
       CpuFeatureScope scope(&assm, SSE3);
+      __ haddps(xmm1, xmm0);
+      __ haddps(xmm1, Operand(rbx, rcx, times_4, 10000));
       __ lddqu(xmm1, Operand(rdx, 4));
     }
   }
@@ -609,6 +639,8 @@ TEST(DisasmX64) {
       __ vminss(xmm9, xmm1, Operand(rbx, rcx, times_8, 10000));
       __ vmaxss(xmm8, xmm1, xmm2);
       __ vmaxss(xmm9, xmm1, Operand(rbx, rcx, times_1, 10000));
+      __ vsqrtss(xmm8, xmm1, xmm2);
+      __ vsqrtss(xmm9, xmm1, Operand(rbx, rcx, times_1, 10000));
       __ vmovss(xmm9, Operand(r11, rcx, times_8, -10000));
       __ vmovss(Operand(rbx, r9, times_4, 10000), xmm1);
       __ vucomiss(xmm9, xmm1);
@@ -670,6 +702,8 @@ TEST(DisasmX64) {
       __ vandps(xmm9, xmm1, Operand(rbx, rcx, times_4, 10000));
       __ vxorps(xmm0, xmm1, xmm9);
       __ vxorps(xmm0, xmm1, Operand(rbx, rcx, times_4, 10000));
+      __ vhaddps(xmm0, xmm1, xmm9);
+      __ vhaddps(xmm0, xmm1, Operand(rbx, rcx, times_4, 10000));
 
       __ vandpd(xmm0, xmm9, xmm2);
       __ vandpd(xmm9, xmm1, Operand(rbx, rcx, times_4, 10000));
@@ -952,9 +986,9 @@ TEST(DisasmX64) {
 #ifdef OBJECT_PRINT
   OFStream os(stdout);
   code->Print(os);
-  byte* begin = code->instruction_start();
-  byte* end = begin + code->instruction_size();
-  disasm::Disassembler::Disassemble(stdout, begin, end);
+  byte* begin = code->raw_instruction_start();
+  byte* end = begin + code->raw_instruction_size();
+  Disassemble(stdout, begin, end);
 #endif
 }
 

@@ -33,7 +33,7 @@
 #include "src/base/platform/platform.h"
 #include "src/base/utils/random-number-generator.h"
 #include "src/disassembler.h"
-#include "src/factory.h"
+#include "src/heap/factory.h"
 #include "src/macro-assembler.h"
 #include "src/ostreams.h"
 #include "test/cctest/cctest.h"
@@ -220,7 +220,7 @@ TEST(AssemblerIa325) {
   v8::internal::byte buffer[256];
   Assembler assm(isolate, buffer, sizeof buffer);
 
-  __ mov(eax, Operand(reinterpret_cast<intptr_t>(&baz), RelocInfo::NONE32));
+  __ mov(eax, Operand(reinterpret_cast<intptr_t>(&baz), RelocInfo::NONE));
   __ ret(0);
 
   CodeDesc desc;
@@ -538,6 +538,38 @@ TEST(AssemblerIa32SSE) {
   CHECK_EQ(2, f(1.0, 2.0));
 }
 
+TEST(AssemblerIa32SSE3) {
+  CcTest::InitializeVM();
+  if (!CpuFeatures::IsSupported(SSE3)) return;
+
+  Isolate* isolate = reinterpret_cast<Isolate*>(CcTest::isolate());
+  HandleScope scope(isolate);
+  v8::internal::byte buffer[256];
+  MacroAssembler assm(isolate, buffer, sizeof(buffer),
+                      v8::internal::CodeObjectRequired::kYes);
+  {
+    CpuFeatureScope fscope(&assm, SSE3);
+    __ movss(xmm0, Operand(esp, kPointerSize));
+    __ movss(xmm1, Operand(esp, 2 * kPointerSize));
+    __ shufps(xmm0, xmm0, 0x0);
+    __ shufps(xmm1, xmm1, 0x0);
+    __ haddps(xmm1, xmm0);
+    __ cvttss2si(eax, xmm1);
+    __ ret(0);
+  }
+
+  CodeDesc desc;
+  assm.GetCode(isolate, &desc);
+  Handle<Code> code =
+      isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
+#ifdef OBJECT_PRINT
+  OFStream os(stdout);
+  code->Print(os);
+#endif
+
+  F8 f = FUNCTION_CAST<F8>(code->entry());
+  CHECK_EQ(4, f(1.0, 2.0));
+}
 
 typedef int (*F9)(double x, double y, double z);
 TEST(AssemblerX64FMA_sd) {
@@ -1054,12 +1086,12 @@ TEST(AssemblerIa32BMI1) {
     // blsmsk
     __ inc(eax);
     __ blsmsk(ebx, ecx);
-    __ cmp(ebx, Immediate(0x0000000fu));  // expected result
+    __ cmp(ebx, Immediate(0x0000000Fu));  // expected result
     __ j(not_equal, &exit);
 
     __ inc(eax);
     __ blsmsk(ebx, Operand(esp, 0));
-    __ cmp(ebx, Immediate(0x0000000fu));  // expected result
+    __ cmp(ebx, Immediate(0x0000000Fu));  // expected result
     __ j(not_equal, &exit);
 
     // blsr
@@ -1250,7 +1282,7 @@ TEST(AssemblerIa32BMI2) {
     __ j(not_equal, &exit);
 
     // pdep
-    __ mov(edx, Immediate(0xfffffff0u));
+    __ mov(edx, Immediate(0xFFFFFFF0u));
 
     __ inc(eax);
     __ pdep(ebx, edx, ecx);
@@ -1263,16 +1295,16 @@ TEST(AssemblerIa32BMI2) {
     __ j(not_equal, &exit);
 
     // pext
-    __ mov(edx, Immediate(0xfffffff0u));
+    __ mov(edx, Immediate(0xFFFFFFF0u));
 
     __ inc(eax);
     __ pext(ebx, edx, ecx);
-    __ cmp(ebx, Immediate(0x0000fffeu));  // expected result
+    __ cmp(ebx, Immediate(0x0000FFFEu));  // expected result
     __ j(not_equal, &exit);
 
     __ inc(eax);
     __ pext(ebx, edx, Operand(esp, 0));
-    __ cmp(ebx, Immediate(0x0000fffeu));  // expected result
+    __ cmp(ebx, Immediate(0x0000FFFEu));  // expected result
     __ j(not_equal, &exit);
 
     // sarx

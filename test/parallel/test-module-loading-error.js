@@ -74,7 +74,14 @@ const re = /^The "id" argument must be of type string\. Received type \w+$/;
 common.expectsError(
   () => { require(''); },
   {
-    type: Error,
+    type: TypeError,
     code: 'ERR_INVALID_ARG_VALUE',
     message: 'The argument \'id\' must be a non-empty string. Received \'\''
+  });
+
+common.expectsError(
+  () => { require('../fixtures/packages/is-dir'); },
+  {
+    code: 'MODULE_NOT_FOUND',
+    message: 'Cannot find module \'../fixtures/packages/is-dir\''
   });

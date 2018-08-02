@@ -87,7 +87,7 @@ class PropertyAccessInfo final {
   PropertyAccessInfo();
 
   bool Merge(PropertyAccessInfo const* that, AccessMode access_mode,
-             Zone* zone) WARN_UNUSED_RESULT;
+             Zone* zone) V8_WARN_UNUSED_RESULT;
 
   bool IsNotFound() const { return kind() == kNotFound; }
   bool IsDataConstant() const { return kind() == kDataConstant; }
@@ -147,6 +147,9 @@ class AccessInfoFactory final {
   bool ComputeElementAccessInfos(MapHandles const& maps, AccessMode access_mode,
                                  ZoneVector<ElementAccessInfo>* access_infos);
   bool ComputePropertyAccessInfo(Handle<Map> map, Handle<Name> name,
+                                 AccessMode access_mode,
+                                 PropertyAccessInfo* access_info);
+  bool ComputePropertyAccessInfo(MapHandles const& maps, Handle<Name> name,
                                  AccessMode access_mode,
                                  PropertyAccessInfo* access_info);
   bool ComputePropertyAccessInfos(MapHandles const& maps, Handle<Name> name,

@@ -2,31 +2,31 @@
 #define SRC_NODE_CONTEXTIFY_H_
 
 #include "node_internals.h"
-#include "node_watchdog.h"
-#include "base_object-inl.h"
+#include "node_context_data.h"
 
 namespace node {
 namespace contextify {
 
+struct ContextOptions {
+  v8::Local<v8::String> name;
+  v8::Local<v8::String> origin;
+  v8::Local<v8::Boolean> allow_code_gen_strings;
+  v8::Local<v8::Boolean> allow_code_gen_wasm;
+};
+
 class ContextifyContext {
- protected:
-  // V8 reserves the first field in context objects for the debugger. We use the
-  // second field to hold a reference to the sandbox object.
-  enum { kSandboxObjectIndex = 1 };
-
-  Environment* const env_;
-  v8::Persistent<v8::Context> context_;
-
  public:
   ContextifyContext(Environment* env,
                     v8::Local<v8::Object> sandbox_obj,
-                    v8::Local<v8::Object> options_obj);
-  ~ContextifyContext();
+                    const ContextOptions& options);
 
   v8::Local<v8::Value> CreateDataWrapper(Environment* env);
   v8::Local<v8::Context> CreateV8Context(Environment* env,
-      v8::Local<v8::Object> sandbox_obj, v8::Local<v8::Object> options_obj);
+      v8::Local<v8::Object> sandbox_obj, const ContextOptions& options);
   static void Init(Environment* env, v8::Local<v8::Object> target);
+
+  static bool AllowWasmCodeGeneration(
+      v8::Local<v8::Context> context, v8::Local<v8::String>);
 
   static ContextifyContext* ContextFromContextifiedSandbox(
       Environment* env,
@@ -46,8 +46,12 @@ class ContextifyContext {
 
   inline v8::Local<v8::Object> sandbox() const {
     return v8::Local<v8::Object>::Cast(
-        context()->GetEmbedderData(kSandboxObjectIndex));
+        context()->GetEmbedderData(ContextEmbedderIndex::kSandboxObject));
   }
+
+
+  template <typename T>
+  static ContextifyContext* Get(const v8::PropertyCallbackInfo<T>& args);
 
  private:
   static void MakeContext(const v8::FunctionCallbackInfo<v8::Value>& args);
@@ -90,18 +94,9 @@ class ContextifyContext {
   static void IndexedPropertyDeleterCallback(
       uint32_t index,
       const v8::PropertyCallbackInfo<v8::Boolean>& args);
+  Environment* const env_;
+  Persistent<v8::Context> context_;
 };
-
-v8::Maybe<bool> GetBreakOnSigintArg(
-    Environment* env, v8::Local<v8::Value> options);
-v8::Maybe<int64_t> GetTimeoutArg(
-    Environment* env, v8::Local<v8::Value> options);
-v8::MaybeLocal<v8::Integer> GetLineOffsetArg(
-    Environment* env, v8::Local<v8::Value> options);
-v8::MaybeLocal<v8::Integer> GetColumnOffsetArg(
-    Environment* env, v8::Local<v8::Value> options);
-v8::MaybeLocal<v8::Context> GetContextArg(
-    Environment* env, v8::Local<v8::Value> options);
 
 }  // namespace contextify
 }  // namespace node

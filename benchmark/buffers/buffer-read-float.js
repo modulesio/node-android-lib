@@ -2,19 +2,15 @@
 const common = require('../common.js');
 
 const bench = common.createBenchmark(main, {
-  noAssert: ['false', 'true'],
   type: ['Double', 'Float'],
   endian: ['BE', 'LE'],
   value: ['zero', 'big', 'small', 'inf', 'nan'],
-  millions: [1]
+  n: [1e6]
 });
 
-function main(conf) {
-  const noAssert = conf.noAssert === 'true';
-  const len = +conf.millions * 1e6;
+function main({ n, type, endian, value }) {
+  type = type || 'Double';
   const buff = Buffer.alloc(8);
-  const type = conf.type || 'Double';
-  const endian = conf.endian;
   const fn = `read${type}${endian}`;
   const values = {
     Double: {
@@ -32,15 +28,12 @@ function main(conf) {
       nan: NaN,
     },
   };
-  const value = values[type][conf.value];
 
-  buff[`write${type}${endian}`](value, 0, noAssert);
-  const testFunction = new Function('buff', `
-    for (var i = 0; i !== ${len}; i++) {
-      buff.${fn}(0, ${JSON.stringify(noAssert)});
-    }
-  `);
+  buff[`write${type}${endian}`](values[type][value], 0);
+
   bench.start();
-  testFunction(buff);
-  bench.end(len / 1e6);
+  for (var i = 0; i !== n; i++) {
+    buff[fn](0);
+  }
+  bench.end(n);
 }

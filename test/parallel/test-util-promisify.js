@@ -7,8 +7,6 @@ const vm = require('vm');
 const { promisify } = require('util');
 const { customPromisifyArgs } = require('internal/util');
 
-common.crashOnUnhandledRejection();
-
 const stat = promisify(fs.stat);
 
 {
@@ -191,6 +189,7 @@ const stat = promisify(fs.stat);
     {
       code: 'ERR_INVALID_ARG_TYPE',
       type: TypeError,
-      message: 'The "original" argument must be of type Function'
+      message: 'The "original" argument must be of type Function. ' +
+               `Received type ${typeof input}`
     });
 });

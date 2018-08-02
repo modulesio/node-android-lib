@@ -17,8 +17,10 @@ class InspectorSocket {
  public:
   class Delegate {
    public:
-    virtual void OnHttpGet(const std::string& path) = 0;
-    virtual void OnSocketUpgrade(const std::string& path,
+    virtual void OnHttpGet(const std::string& host,
+                           const std::string& path) = 0;
+    virtual void OnSocketUpgrade(const std::string& host,
+                                 const std::string& path,
                                  const std::string& accept_key) = 0;
     virtual void OnWsFrame(const std::vector<char>& frame) = 0;
     virtual ~Delegate() {}
@@ -38,9 +40,10 @@ class InspectorSocket {
   std::string GetHost();
 
  private:
-  InspectorSocket();
+  static void Shutdown(ProtocolHandler*);
+  InspectorSocket() = default;
 
-  std::unique_ptr<ProtocolHandler, void(*)(ProtocolHandler*)> protocol_handler_;
+  DeleteFnPtr<ProtocolHandler, Shutdown> protocol_handler_;
 
   DISALLOW_COPY_AND_ASSIGN(InspectorSocket);
 };

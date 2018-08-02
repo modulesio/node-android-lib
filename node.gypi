@@ -37,13 +37,37 @@
         'NODE_SHARED_MODE',
       ],
     }],
+    [ 'OS=="win"', {
+      'defines!': [
+        'NODE_PLATFORM="win"',
+      ],
+      'defines': [
+        'FD_SETSIZE=1024',
+        # we need to use node's preferred "win32" rather than gyp's preferred "win"
+        'NODE_PLATFORM="win32"',
+        # Stop <windows.h> from defining macros that conflict with
+        # std::min() and std::max().  We don't use <windows.h> (much)
+        # but we still inherit it from uv.h.
+        'NOMINMAX',
+        '_UNICODE=1',
+      ],
+    }, { # POSIX
+      'defines': [ '__POSIX__' ],
+    }],
+
     [ 'node_enable_d8=="true"', {
-      'dependencies': [ 'deps/v8/src/d8.gyp:d8' ],
+      'dependencies': [ 'deps/v8/gypfiles/d8.gyp:d8' ],
     }],
     [ 'node_use_bundled_v8=="true"', {
-      'dependencies': [
-        'deps/v8/src/v8.gyp:v8',
-        'deps/v8/src/v8.gyp:v8_libplatform'
+      'conditions': [
+        [ 'build_v8_with_gn=="true"', {
+          'dependencies': ['deps/v8/gypfiles/v8-monolithic.gyp:v8_monolith'],
+        }, {
+          'dependencies': [
+            'deps/v8/gypfiles/v8.gyp:v8',
+            'deps/v8/gypfiles/v8.gyp:v8_libplatform',
+          ],
+        }],
       ],
     }],
     [ 'node_use_v8_platform=="true"', {
@@ -66,10 +90,6 @@
         'NODE_RELEASE_URLBASE="<(node_release_urlbase)"',
       ]
     }],
-    [
-      'debug_http2==1', {
-      'defines': [ 'NODE_DEBUG_HTTP2=1' ]
-    }],
     [ 'v8_enable_i18n_support==1', {
       'defines': [ 'NODE_HAVE_I18N_SUPPORT=1' ],
       'dependencies': [
@@ -86,27 +106,56 @@
        target_arch=="ia32" or target_arch=="x32")', {
       'defines': [ 'NODE_ENABLE_VTUNE_PROFILING' ],
       'dependencies': [
-        'deps/v8/src/third_party/vtune/v8vtune.gyp:v8_vtune'
+        'deps/v8/gypfiles/v8vtune.gyp:v8_vtune'
       ],
     }],
     [ 'node_no_browser_globals=="true"', {
       'defines': [ 'NODE_NO_BROWSER_GLOBALS' ],
     } ],
     [ 'node_use_bundled_v8=="true" and v8_postmortem_support=="true"', {
-      'dependencies': [ 'deps/v8/src/v8.gyp:postmortem-metadata' ],
       'conditions': [
         # -force_load is not applicable for the static library
         [ 'force_load=="true"', {
           'xcode_settings': {
             'OTHER_LDFLAGS': [
-              '-Wl,-force_load,<(V8_BASE)',
+              '-Wl,-force_load,<(v8_base)',
             ],
           },
+        }],
+        # when building with GN, the v8_monolith target already includes postmortem metadata
+        [ 'build_v8_with_gn=="false"', {
+          'dependencies': [ 'deps/v8/gypfiles/v8.gyp:postmortem-metadata' ],
         }],
       ],
     }],
     [ 'node_shared_zlib=="false"', {
       'dependencies': [ 'deps/zlib/zlib.gyp:zlib' ],
+      'conditions': [
+        [ 'force_load=="true"', {
+          'xcode_settings': {
+            'OTHER_LDFLAGS': [
+              '-Wl,-force_load,<(PRODUCT_DIR)/<(STATIC_LIB_PREFIX)'
+                  'zlib<(STATIC_LIB_SUFFIX)',
+            ],
+          },
+          'msvs_settings': {
+            'VCLinkerTool': {
+              'AdditionalOptions': [
+                '/WHOLEARCHIVE:<(PRODUCT_DIR)\\lib\\zlib<(STATIC_LIB_SUFFIX)',
+              ],
+            },
+          },
+          'conditions': [
+            ['OS!="aix" and node_shared=="false"', {
+              'ldflags': [
+                '-Wl,--whole-archive,<(obj_dir)/deps/zlib/<(STATIC_LIB_PREFIX)'
+                    'zlib<(STATIC_LIB_SUFFIX)',
+                '-Wl,--no-whole-archive',
+              ],
+            }],
+          ],
+        }],
+      ],
     }],
 
     [ 'node_shared_http_parser=="false"', {
@@ -119,6 +168,32 @@
 
     [ 'node_shared_libuv=="false"', {
       'dependencies': [ 'deps/uv/uv.gyp:libuv' ],
+      'conditions': [
+        [ 'force_load=="true"', {
+          'xcode_settings': {
+            'OTHER_LDFLAGS': [
+              '-Wl,-force_load,<(PRODUCT_DIR)/<(STATIC_LIB_PREFIX)'
+                  'uv<(STATIC_LIB_SUFFIX)',
+            ],
+          },
+          'msvs_settings': {
+            'VCLinkerTool': {
+              'AdditionalOptions': [
+                '/WHOLEARCHIVE:<(PRODUCT_DIR)\\lib\\libuv<(STATIC_LIB_SUFFIX)',
+              ],
+            },
+          },
+          'conditions': [
+            ['OS!="aix" and node_shared=="false"', {
+              'ldflags': [
+                '-Wl,--whole-archive,<(obj_dir)/deps/uv/<(STATIC_LIB_PREFIX)'
+                    'uv<(STATIC_LIB_SUFFIX)',
+                '-Wl,--no-whole-archive',
+              ],
+            }],
+          ],
+        }],
+      ],
     }],
 
     [ 'node_shared_nghttp2=="false"', {
@@ -154,7 +229,7 @@
             {
               'action_name': 'expfile',
               'inputs': [
-                '<(OBJ_DIR)'
+                '<(obj_dir)'
               ],
               'outputs': [
                 '<(PRODUCT_DIR)/node.exp'
@@ -184,25 +259,20 @@
       ],
     }],
     [ '(OS=="freebsd" or OS=="linux") and node_shared=="false"'
-        ' and coverage=="false" and force_load=="true"', {
+        ' and force_load=="true"', {
       'ldflags': [ '-Wl,-z,noexecstack',
-                   '-Wl,--whole-archive <(V8_BASE)',
+                   '-Wl,--whole-archive <(v8_base)',
                    '-Wl,--no-whole-archive' ]
     }],
-    [ '(OS=="freebsd" or OS=="linux") and node_shared=="false"'
-        ' and coverage=="true" and force_load=="true"', {
-      'ldflags': [ '-Wl,-z,noexecstack',
-                   '-Wl,--whole-archive <(V8_BASE)',
-                   '-Wl,--no-whole-archive',
-                   '--coverage',
+    [ 'OS in "mac freebsd linux" and node_shared=="false"'
+        ' and coverage=="true"', {
+      'ldflags': [ '--coverage',
                    '-g',
                    '-O0' ],
-       'cflags': [ '--coverage',
+      'cflags': [ '--coverage',
                    '-g',
                    '-O0' ],
-       'cflags!': [ '-O3' ]
-    }],
-    [ 'OS=="mac" and node_shared=="false" and coverage=="true"', {
+      'cflags!': [ '-O3' ],
       'xcode_settings': {
         'OTHER_LDFLAGS': [
           '--coverage',
@@ -237,15 +307,21 @@
             [ 'force_load=="true"', {
               'xcode_settings': {
                 'OTHER_LDFLAGS': [
-                  '-Wl,-force_load,<(PRODUCT_DIR)/<(OPENSSL_PRODUCT)',
+                  '-Wl,-force_load,<(PRODUCT_DIR)/<(openssl_product)',
                 ],
+              },
+              'msvs_settings': {
+                'VCLinkerTool': {
+                  'AdditionalOptions': [
+                    '/WHOLEARCHIVE:<(PRODUCT_DIR)\\lib\\<(openssl_product)',
+                  ],
+                },
               },
               'conditions': [
                 ['OS in "linux freebsd" and node_shared=="false"', {
                   'ldflags': [
                     '-Wl,--whole-archive,'
-                        '<(OBJ_DIR)/deps/openssl/'
-                        '<(OPENSSL_PRODUCT)',
+                      '<(obj_dir)/deps/openssl/<(openssl_product)',
                     '-Wl,--no-whole-archive',
                   ],
                 }],

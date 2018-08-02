@@ -220,6 +220,12 @@ class Histogram {
   int max() const { return max_; }
   int num_buckets() const { return num_buckets_; }
 
+  // Asserts that |expected_counters| are the same as the Counters this
+  // Histogram reports to.
+  void AssertReportsToCounters(Counters* expected_counters) {
+    DCHECK_EQ(counters_, expected_counters);
+  }
+
  protected:
   Histogram() {}
   Histogram(const char* name, int min, int max, int num_buckets,
@@ -229,7 +235,9 @@ class Histogram {
         max_(max),
         num_buckets_(num_buckets),
         histogram_(nullptr),
-        counters_(counters) {}
+        counters_(counters) {
+    DCHECK(counters_);
+  }
 
   Counters* counters() const { return counters_; }
 
@@ -261,6 +269,10 @@ class TimedHistogram : public Histogram {
   // Stop the timer and record the results. Log if isolate non-null.
   void Stop(base::ElapsedTimer* timer, Isolate* isolate);
 
+  // Records a TimeDelta::Max() result. Useful to record percentage of tasks
+  // that never got to run in a given scenario. Log if isolate non-null.
+  void RecordAbandon(base::ElapsedTimer* timer, Isolate* isolate);
+
  protected:
   friend class Counters;
   HistogramTimerResolution resolution_;
@@ -282,6 +294,7 @@ class TimedHistogramScope {
       : histogram_(histogram), isolate_(isolate) {
     histogram_->Start(&timer_, isolate);
   }
+
   ~TimedHistogramScope() { histogram_->Stop(&timer_, isolate_); }
 
  private:
@@ -290,6 +303,42 @@ class TimedHistogramScope {
   Isolate* isolate_;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(TimedHistogramScope);
+};
+
+// Helper class for recording a TimedHistogram asynchronously with manual
+// controls (it will not generate a report if destroyed without explicitly
+// triggering a report). |async_counters| should be a shared_ptr to
+// |histogram->counters()|, making it is safe to report to an
+// AsyncTimedHistogram after the associated isolate has been destroyed.
+// AsyncTimedHistogram can be moved/copied to avoid computing Now() multiple
+// times when the times of multiple tasks are identical; each copy will generate
+// its own report.
+class AsyncTimedHistogram {
+ public:
+  explicit AsyncTimedHistogram(TimedHistogram* histogram,
+                               std::shared_ptr<Counters> async_counters)
+      : histogram_(histogram), async_counters_(std::move(async_counters)) {
+    histogram_->AssertReportsToCounters(async_counters_.get());
+    histogram_->Start(&timer_, nullptr);
+  }
+
+  ~AsyncTimedHistogram() = default;
+
+  AsyncTimedHistogram(const AsyncTimedHistogram& other) = default;
+  AsyncTimedHistogram& operator=(const AsyncTimedHistogram& other) = default;
+  AsyncTimedHistogram(AsyncTimedHistogram&& other) = default;
+  AsyncTimedHistogram& operator=(AsyncTimedHistogram&& other) = default;
+
+  // Records the time elapsed to |histogram_| and stops |timer_|.
+  void RecordDone() { histogram_->Stop(&timer_, nullptr); }
+
+  // Records TimeDelta::Max() to |histogram_| and stops |timer_|.
+  void RecordAbandon() { histogram_->RecordAbandon(&timer_, nullptr); }
+
+ private:
+  base::ElapsedTimer timer_;
+  TimedHistogram* histogram_;
+  std::shared_ptr<Counters> async_counters_;
 };
 
 // Helper class for scoping a TimedHistogram, where the histogram is selected at
@@ -579,6 +628,7 @@ double AggregatedMemoryHistogram<Histogram>::Aggregate(double current_ms,
 
 class RuntimeCallCounter final {
  public:
+  RuntimeCallCounter() : RuntimeCallCounter(nullptr) {}
   explicit RuntimeCallCounter(const char* name)
       : name_(name), count_(0), time_(0) {}
   V8_NOINLINE void Reset();
@@ -595,8 +645,6 @@ class RuntimeCallCounter final {
 
  private:
   friend class RuntimeCallStats;
-
-  RuntimeCallCounter() {}
 
   const char* name_;
   int64_t count_;
@@ -634,7 +682,9 @@ class RuntimeCallTimer final {
   base::TimeDelta elapsed_;
 };
 
-#define FOR_EACH_GC_COUNTER(V) TRACER_SCOPES(V)
+#define FOR_EACH_GC_COUNTER(V) \
+  TRACER_SCOPES(V)             \
+  TRACER_BACKGROUND_SCOPES(V)
 
 #define FOR_EACH_API_COUNTER(V)                            \
   V(ArrayBuffer_Cast)                                      \
@@ -642,6 +692,11 @@ class RuntimeCallTimer final {
   V(ArrayBuffer_New)                                       \
   V(Array_CloneElementAt)                                  \
   V(Array_New)                                             \
+  V(BigInt_NewFromWords)                                   \
+  V(BigInt64Array_New)                                     \
+  V(BigUint64Array_New)                                    \
+  V(BigIntObject_New)                                      \
+  V(BigIntObject_BigIntValue)                              \
   V(BooleanObject_BooleanValue)                            \
   V(BooleanObject_New)                                     \
   V(Context_New)                                           \
@@ -715,6 +770,7 @@ class RuntimeCallTimer final {
   V(ObjectTemplate_New)                                    \
   V(ObjectTemplate_NewInstance)                            \
   V(Object_ToArrayIndex)                                   \
+  V(Object_ToBigInt)                                       \
   V(Object_ToDetailString)                                 \
   V(Object_ToInt32)                                        \
   V(Object_ToInteger)                                      \
@@ -785,8 +841,7 @@ class RuntimeCallTimer final {
 
 #define FOR_EACH_MANUAL_COUNTER(V)             \
   V(AccessorGetterCallback)                    \
-  V(AccessorNameGetterCallback)                \
-  V(AccessorNameSetterCallback)                \
+  V(AccessorSetterCallback)                    \
   V(ArrayLengthGetter)                         \
   V(ArrayLengthSetter)                         \
   V(BoundFunctionNameGetter)                   \
@@ -795,7 +850,6 @@ class RuntimeCallTimer final {
   V(CompileBackgroundEval)                     \
   V(CompileBackgroundIgnition)                 \
   V(CompileBackgroundScript)                   \
-  V(CompileBackgroundRenumber)                 \
   V(CompileBackgroundRewriteReturnResult)      \
   V(CompileBackgroundScopeAnalysis)            \
   V(CompileDeserialize)                        \
@@ -805,7 +859,6 @@ class RuntimeCallTimer final {
   V(CompileGetFromOptimizedCodeMap)            \
   V(CompileIgnition)                           \
   V(CompileIgnitionFinalization)               \
-  V(CompileRenumber)                           \
   V(CompileRewriteReturnResult)                \
   V(CompileScopeAnalysis)                      \
   V(CompileScript)                             \
@@ -821,18 +874,21 @@ class RuntimeCallTimer final {
   V(GC_Custom_SlowAllocateRaw)                 \
   V(GCEpilogueCallback)                        \
   V(GCPrologueCallback)                        \
-  V(GenericNamedPropertyDefinerCallback)       \
-  V(GenericNamedPropertyDeleterCallback)       \
-  V(GenericNamedPropertyDescriptorCallback)    \
-  V(GenericNamedPropertyQueryCallback)         \
-  V(GenericNamedPropertySetterCallback)        \
   V(GetMoreDataCallback)                       \
-  V(IndexedPropertyDefinerCallback)            \
-  V(IndexedPropertyDeleterCallback)            \
-  V(IndexedPropertyDescriptorCallback)         \
-  V(IndexedPropertyGetterCallback)             \
-  V(IndexedPropertyQueryCallback)              \
-  V(IndexedPropertySetterCallback)             \
+  V(NamedDefinerCallback)                      \
+  V(NamedDeleterCallback)                      \
+  V(NamedDescriptorCallback)                   \
+  V(NamedQueryCallback)                        \
+  V(NamedSetterCallback)                       \
+  V(NamedGetterCallback)                       \
+  V(NamedEnumeratorCallback)                   \
+  V(IndexedDefinerCallback)                    \
+  V(IndexedDeleterCallback)                    \
+  V(IndexedDescriptorCallback)                 \
+  V(IndexedGetterCallback)                     \
+  V(IndexedQueryCallback)                      \
+  V(IndexedSetterCallback)                     \
+  V(IndexedEnumeratorCallback)                 \
   V(InvokeApiInterruptCallbacks)               \
   V(InvokeFunctionCallback)                    \
   V(JS_Execution)                              \
@@ -878,6 +934,9 @@ class RuntimeCallTimer final {
   V(KeyedStoreIC_SlowStub)                        \
   V(KeyedStoreIC_StoreFastElementStub)            \
   V(KeyedStoreIC_StoreElementStub)                \
+  V(StoreInArrayLiteralIC_SlowStub)               \
+  V(LoadGlobalIC_LoadScriptContextField)          \
+  V(LoadGlobalIC_SlowStub)                        \
   V(LoadIC_FunctionPrototypeStub)                 \
   V(LoadIC_HandlerCacheHit_Accessor)              \
   V(LoadIC_LoadAccessorDH)                        \
@@ -899,12 +958,13 @@ class RuntimeCallTimer final {
   V(LoadIC_LoadNonexistentDH)                     \
   V(LoadIC_LoadNormalDH)                          \
   V(LoadIC_LoadNormalFromPrototypeDH)             \
-  V(LoadIC_LoadScriptContextFieldStub)            \
   V(LoadIC_NonReceiver)                           \
   V(LoadIC_Premonomorphic)                        \
   V(LoadIC_SlowStub)                              \
   V(LoadIC_StringLength)                          \
   V(LoadIC_StringWrapperLength)                   \
+  V(StoreGlobalIC_StoreScriptContextField)        \
+  V(StoreGlobalIC_SlowStub)                       \
   V(StoreIC_HandlerCacheHit_Accessor)             \
   V(StoreIC_NonReceiver)                          \
   V(StoreIC_Premonomorphic)                       \
@@ -919,53 +979,48 @@ class RuntimeCallTimer final {
   V(StoreIC_StoreNativeDataPropertyDH)            \
   V(StoreIC_StoreNativeDataPropertyOnPrototypeDH) \
   V(StoreIC_StoreNormalDH)                        \
-  V(StoreIC_StoreScriptContextFieldStub)          \
   V(StoreIC_StoreTransitionDH)
+
+enum RuntimeCallCounterId {
+#define CALL_RUNTIME_COUNTER(name) kGC_##name,
+  FOR_EACH_GC_COUNTER(CALL_RUNTIME_COUNTER)
+#undef CALL_RUNTIME_COUNTER
+#define CALL_RUNTIME_COUNTER(name) k##name,
+      FOR_EACH_MANUAL_COUNTER(CALL_RUNTIME_COUNTER)
+#undef CALL_RUNTIME_COUNTER
+#define CALL_RUNTIME_COUNTER(name, nargs, ressize) kRuntime_##name,
+          FOR_EACH_INTRINSIC(CALL_RUNTIME_COUNTER)
+#undef CALL_RUNTIME_COUNTER
+#define CALL_BUILTIN_COUNTER(name) kBuiltin_##name,
+              BUILTIN_LIST_C(CALL_BUILTIN_COUNTER)
+#undef CALL_BUILTIN_COUNTER
+#define CALL_BUILTIN_COUNTER(name) kAPI_##name,
+                  FOR_EACH_API_COUNTER(CALL_BUILTIN_COUNTER)
+#undef CALL_BUILTIN_COUNTER
+#define CALL_BUILTIN_COUNTER(name) kHandler_##name,
+                      FOR_EACH_HANDLER_COUNTER(CALL_BUILTIN_COUNTER)
+#undef CALL_BUILTIN_COUNTER
+                          kNumberOfCounters
+};
 
 class RuntimeCallStats final : public ZoneObject {
  public:
-  typedef RuntimeCallCounter RuntimeCallStats::*CounterId;
   V8_EXPORT_PRIVATE RuntimeCallStats();
-
-#define CALL_RUNTIME_COUNTER(name) RuntimeCallCounter GC_##name;
-  FOR_EACH_GC_COUNTER(CALL_RUNTIME_COUNTER)
-#undef CALL_RUNTIME_COUNTER
-#define CALL_RUNTIME_COUNTER(name) RuntimeCallCounter name;
-  FOR_EACH_MANUAL_COUNTER(CALL_RUNTIME_COUNTER)
-#undef CALL_RUNTIME_COUNTER
-#define CALL_RUNTIME_COUNTER(name, nargs, ressize) \
-  RuntimeCallCounter Runtime_##name;
-  FOR_EACH_INTRINSIC(CALL_RUNTIME_COUNTER)
-#undef CALL_RUNTIME_COUNTER
-#define CALL_BUILTIN_COUNTER(name) RuntimeCallCounter Builtin_##name;
-  BUILTIN_LIST_C(CALL_BUILTIN_COUNTER)
-#undef CALL_BUILTIN_COUNTER
-#define CALL_BUILTIN_COUNTER(name) RuntimeCallCounter API_##name;
-  FOR_EACH_API_COUNTER(CALL_BUILTIN_COUNTER)
-#undef CALL_BUILTIN_COUNTER
-#define CALL_BUILTIN_COUNTER(name) RuntimeCallCounter Handler_##name;
-  FOR_EACH_HANDLER_COUNTER(CALL_BUILTIN_COUNTER)
-#undef CALL_BUILTIN_COUNTER
-
-  static const CounterId counters[];
-  static const int counters_count;
 
   // Starting measuring the time for a function. This will establish the
   // connection to the parent counter for properly calculating the own times.
-  V8_EXPORT_PRIVATE static void Enter(RuntimeCallStats* stats,
-                                      RuntimeCallTimer* timer,
-                                      CounterId counter_id);
+  V8_EXPORT_PRIVATE void Enter(RuntimeCallTimer* timer,
+                               RuntimeCallCounterId counter_id);
 
   // Leave a scope for a measured runtime function. This will properly add
   // the time delta to the current_counter and subtract the delta from its
   // parent.
-  V8_EXPORT_PRIVATE static void Leave(RuntimeCallStats* stats,
-                                      RuntimeCallTimer* timer);
+  V8_EXPORT_PRIVATE void Leave(RuntimeCallTimer* timer);
 
   // Set counter id for the innermost measurement. It can be used to refine
   // event kind when a runtime entry counter is too generic.
-  V8_EXPORT_PRIVATE static void CorrectCurrentCounterId(RuntimeCallStats* stats,
-                                                        CounterId counter_id);
+  V8_EXPORT_PRIVATE void CorrectCurrentCounterId(
+      RuntimeCallCounterId counter_id);
 
   V8_EXPORT_PRIVATE void Reset();
   // Add all entries from another stats object.
@@ -980,6 +1035,15 @@ class RuntimeCallStats final : public ZoneObject {
   bool InUse() { return in_use_; }
   bool IsCalledOnTheSameThread();
 
+  static const int kNumberOfCounters =
+      static_cast<int>(RuntimeCallCounterId::kNumberOfCounters);
+  RuntimeCallCounter* GetCounter(RuntimeCallCounterId counter_id) {
+    return &counters_[static_cast<int>(counter_id)];
+  }
+  RuntimeCallCounter* GetCounter(int counter_id) {
+    return &counters_[counter_id];
+  }
+
  private:
   // Top of a stack of active timers.
   base::AtomicValue<RuntimeCallTimer*> current_timer_;
@@ -988,40 +1052,41 @@ class RuntimeCallStats final : public ZoneObject {
   // Used to track nested tracing scopes.
   bool in_use_;
   ThreadId thread_id_;
+  RuntimeCallCounter counters_[kNumberOfCounters];
 };
 
-#define CHANGE_CURRENT_RUNTIME_COUNTER(runtime_call_stats, counter_name) \
-  do {                                                                   \
-    if (V8_UNLIKELY(FLAG_runtime_stats)) {                               \
-      RuntimeCallStats::CorrectCurrentCounterId(                         \
-          runtime_call_stats, &RuntimeCallStats::counter_name);          \
-    }                                                                    \
+#define CHANGE_CURRENT_RUNTIME_COUNTER(runtime_call_stats, counter_id) \
+  do {                                                                 \
+    if (V8_UNLIKELY(FLAG_runtime_stats) && runtime_call_stats) {       \
+      runtime_call_stats->CorrectCurrentCounterId(counter_id);         \
+    }                                                                  \
   } while (false)
 
-#define TRACE_HANDLER_STATS(isolate, counter_name)                          \
-  CHANGE_CURRENT_RUNTIME_COUNTER(isolate->counters()->runtime_call_stats(), \
-                                 Handler_##counter_name)
+#define TRACE_HANDLER_STATS(isolate, counter_name) \
+  CHANGE_CURRENT_RUNTIME_COUNTER(                  \
+      isolate->counters()->runtime_call_stats(),   \
+      RuntimeCallCounterId::kHandler_##counter_name)
 
 // A RuntimeCallTimerScopes wraps around a RuntimeCallTimer to measure the
 // the time of C++ scope.
 class RuntimeCallTimerScope {
  public:
   inline RuntimeCallTimerScope(Isolate* isolate,
-                               RuntimeCallStats::CounterId counter_id);
+                               RuntimeCallCounterId counter_id);
   // This constructor is here just to avoid calling GetIsolate() when the
   // stats are disabled and the isolate is not directly available.
   inline RuntimeCallTimerScope(HeapObject* heap_object,
-                               RuntimeCallStats::CounterId counter_id);
+                               RuntimeCallCounterId counter_id);
   inline RuntimeCallTimerScope(RuntimeCallStats* stats,
-                               RuntimeCallStats::CounterId counter_id) {
+                               RuntimeCallCounterId counter_id) {
     if (V8_LIKELY(!FLAG_runtime_stats || stats == nullptr)) return;
     stats_ = stats;
-    RuntimeCallStats::Enter(stats_, &timer_, counter_id);
+    stats_->Enter(&timer_, counter_id);
   }
 
   inline ~RuntimeCallTimerScope() {
     if (V8_UNLIKELY(stats_ != nullptr)) {
-      RuntimeCallStats::Leave(stats_, &timer_);
+      stats_->Leave(&timer_);
     }
   }
 
@@ -1034,6 +1099,9 @@ class RuntimeCallTimerScope {
 
 #define HISTOGRAM_RANGE_LIST(HR)                                               \
   /* Generic range histograms: HR(name, caption, min, max, num_buckets) */     \
+  HR(background_marking, V8.GCBackgroundMarking, 0, 10000, 101)                \
+  HR(background_scavenger, V8.GCBackgroundScavenger, 0, 10000, 101)            \
+  HR(background_sweeping, V8.GCBackgroundSweeping, 0, 10000, 101)              \
   HR(detached_context_age_in_gc, V8.DetachedContextAgeInGC, 0, 20, 21)         \
   HR(code_cache_reject_reason, V8.CodeCacheRejectReason, 1, 6, 6)              \
   HR(errors_thrown_per_context, V8.ErrorsThrownPerContext, 0, 200, 20)         \
@@ -1081,10 +1149,20 @@ class RuntimeCallTimerScope {
 #define HISTOGRAM_TIMER_LIST(HT)                                               \
   /* Garbage collection timers. */                                             \
   HT(gc_compactor, V8.GCCompactor, 10000, MILLISECOND)                         \
+  HT(gc_compactor_background, V8.GCCompactorBackground, 10000, MILLISECOND)    \
+  HT(gc_compactor_foreground, V8.GCCompactorForeground, 10000, MILLISECOND)    \
   HT(gc_finalize, V8.GCFinalizeMC, 10000, MILLISECOND)                         \
+  HT(gc_finalize_background, V8.GCFinalizeMCBackground, 10000, MILLISECOND)    \
+  HT(gc_finalize_foreground, V8.GCFinalizeMCForeground, 10000, MILLISECOND)    \
   HT(gc_finalize_reduce_memory, V8.GCFinalizeMCReduceMemory, 10000,            \
      MILLISECOND)                                                              \
+  HT(gc_finalize_reduce_memory_background,                                     \
+     V8.GCFinalizeMCReduceMemoryBackground, 10000, MILLISECOND)                \
+  HT(gc_finalize_reduce_memory_foreground,                                     \
+     V8.GCFinalizeMCReduceMemoryForeground, 10000, MILLISECOND)                \
   HT(gc_scavenger, V8.GCScavenger, 10000, MILLISECOND)                         \
+  HT(gc_scavenger_background, V8.GCScavengerBackground, 10000, MILLISECOND)    \
+  HT(gc_scavenger_foreground, V8.GCScavengerForeground, 10000, MILLISECOND)    \
   HT(gc_context, V8.GCContext, 10000,                                          \
      MILLISECOND) /* GC context cleanup time */                                \
   HT(gc_idle_notification, V8.GCIdleNotification, 10000, MILLISECOND)          \
@@ -1131,6 +1209,8 @@ class RuntimeCallTimerScope {
      1000000, MICROSECOND)                                                     \
   HT(wasm_compile_wasm_function_time, V8.WasmCompileFunctionMicroSeconds.wasm, \
      1000000, MICROSECOND)                                                     \
+  HT(liftoff_compile_time, V8.LiftoffCompileMicroSeconds, 10000000,            \
+     MICROSECOND)                                                              \
   HT(wasm_instantiate_wasm_module_time,                                        \
      V8.WasmInstantiateModuleMicroSeconds.wasm, 10000000, MICROSECOND)         \
   HT(wasm_instantiate_asm_module_time,                                         \
@@ -1154,7 +1234,9 @@ class RuntimeCallTimerScope {
   HT(compile_script_no_cache_because_cache_too_cold,                           \
      V8.CompileScriptMicroSeconds.NoCache.CacheTooCold, 1000000, MICROSECOND)  \
   HT(compile_script_on_background,                                             \
-     V8.CompileScriptMicroSeconds.BackgroundThread, 1000000, MICROSECOND)
+     V8.CompileScriptMicroSeconds.BackgroundThread, 1000000, MICROSECOND)      \
+  HT(gc_parallel_task_latency, V8.GC.ParallelTaskLatencyMicroSeconds, 1000000, \
+     MICROSECOND)
 
 #define AGGREGATABLE_HISTOGRAM_TIMER_LIST(AHT) \
   AHT(compile_lazy, V8.CompileLazyMicroSeconds)
@@ -1384,28 +1466,6 @@ class Counters : public std::enable_shared_from_this<Counters> {
   STATS_COUNTER_TS_LIST(SC)
 #undef SC
 
-#define SC(name) \
-  StatsCounter* count_of_##name() { return &count_of_##name##_; } \
-  StatsCounter* size_of_##name() { return &size_of_##name##_; }
-  INSTANCE_TYPE_LIST(SC)
-#undef SC
-
-#define SC(name) \
-  StatsCounter* count_of_CODE_TYPE_##name() \
-    { return &count_of_CODE_TYPE_##name##_; } \
-  StatsCounter* size_of_CODE_TYPE_##name() \
-    { return &size_of_CODE_TYPE_##name##_; }
-  CODE_KIND_LIST(SC)
-#undef SC
-
-#define SC(name) \
-  StatsCounter* count_of_FIXED_ARRAY_##name() \
-    { return &count_of_FIXED_ARRAY_##name##_; } \
-  StatsCounter* size_of_FIXED_ARRAY_##name() \
-    { return &size_of_FIXED_ARRAY_##name##_; }
-  FIXED_ARRAY_SUB_INSTANCE_TYPE_LIST(SC)
-#undef SC
-
   // clang-format off
   enum Id {
 #define RATE_ID(name, caption, max, res) k_##name,
@@ -1541,11 +1601,11 @@ void HistogramTimer::Stop() {
   TimedHistogram::Stop(&timer_, counters()->isolate());
 }
 
-RuntimeCallTimerScope::RuntimeCallTimerScope(
-    Isolate* isolate, RuntimeCallStats::CounterId counter_id) {
+RuntimeCallTimerScope::RuntimeCallTimerScope(Isolate* isolate,
+                                             RuntimeCallCounterId counter_id) {
   if (V8_LIKELY(!FLAG_runtime_stats)) return;
   stats_ = isolate->counters()->runtime_call_stats();
-  RuntimeCallStats::Enter(stats_, &timer_, counter_id);
+  stats_->Enter(&timer_, counter_id);
 }
 
 }  // namespace internal

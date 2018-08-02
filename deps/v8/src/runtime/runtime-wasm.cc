@@ -9,16 +9,17 @@
 #include "src/compiler/wasm-compiler.h"
 #include "src/conversions.h"
 #include "src/debug/debug.h"
-#include "src/factory.h"
 #include "src/frame-constants.h"
+#include "src/heap/factory.h"
 #include "src/objects-inl.h"
 #include "src/objects/frame-array-inl.h"
 #include "src/trap-handler/trap-handler.h"
 #include "src/v8memory.h"
 #include "src/wasm/module-compiler.h"
-#include "src/wasm/wasm-heap.h"
+#include "src/wasm/wasm-code-manager.h"
+#include "src/wasm/wasm-constants.h"
+#include "src/wasm/wasm-engine.h"
 #include "src/wasm/wasm-objects.h"
-#include "src/wasm/wasm-opcodes.h"
 
 namespace v8 {
 namespace internal {
@@ -30,29 +31,24 @@ WasmInstanceObject* GetWasmInstanceOnStackTop(Isolate* isolate) {
   const Address entry = Isolate::c_entry_fp(isolate->thread_local_top());
   Address pc =
       Memory::Address_at(entry + StandardFrameConstants::kCallerPCOffset);
-  WasmInstanceObject* owning_instance = nullptr;
-  if (FLAG_wasm_jit_to_native) {
-    owning_instance = WasmInstanceObject::GetOwningInstance(
-        isolate->wasm_code_manager()->LookupCode(pc));
-  } else {
-    owning_instance = WasmInstanceObject::GetOwningInstanceGC(
-        isolate->inner_pointer_to_code_cache()->GetCacheEntry(pc)->code);
-  }
+  WasmInstanceObject* owning_instance = WasmInstanceObject::GetOwningInstance(
+      isolate->wasm_engine()->code_manager()->LookupCode(pc));
   CHECK_NOT_NULL(owning_instance);
   return owning_instance;
 }
 
+// TODO(titzer): rename to GetNativeContextFromWasmInstanceOnStackTop()
 Context* GetWasmContextOnStackTop(Isolate* isolate) {
   return GetWasmInstanceOnStackTop(isolate)
       ->compiled_module()
-      ->ptr_to_native_context();
+      ->native_context();
 }
 
 class ClearThreadInWasmScope {
  public:
   explicit ClearThreadInWasmScope(bool coming_from_wasm)
       : coming_from_wasm_(coming_from_wasm) {
-    DCHECK_EQ(trap_handler::UseTrapHandler() && coming_from_wasm,
+    DCHECK_EQ(trap_handler::IsTrapHandlerEnabled() && coming_from_wasm,
               trap_handler::IsThreadInWasm());
     if (coming_from_wasm) trap_handler::ClearThreadInWasm();
   }
@@ -79,10 +75,10 @@ RUNTIME_FUNCTION(Runtime_WasmGrowMemory) {
 
   // Set the current isolate's context.
   DCHECK_NULL(isolate->context());
-  isolate->set_context(instance->compiled_module()->ptr_to_native_context());
+  isolate->set_context(instance->compiled_module()->native_context());
 
-  return *isolate->factory()->NewNumberFromInt(
-      WasmInstanceObject::GrowMemory(isolate, instance, delta_pages));
+  return *isolate->factory()->NewNumberFromInt(WasmMemoryObject::Grow(
+      isolate, handle(instance->memory_object(), isolate), delta_pages));
 }
 
 RUNTIME_FUNCTION(Runtime_ThrowWasmError) {
@@ -170,7 +166,7 @@ RUNTIME_FUNCTION(Runtime_WasmGetExceptionRuntimeId) {
       }
     }
   }
-  return Smi::FromInt(wasm::WasmModule::kInvalidExceptionTag);
+  return Smi::FromInt(wasm::kInvalidExceptionTag);
 }
 
 RUNTIME_FUNCTION(Runtime_WasmExceptionGetElement) {
@@ -222,7 +218,7 @@ RUNTIME_FUNCTION(Runtime_WasmExceptionSetElement) {
         CHECK_LT(index, Smi::ToInt(values->length()));
         CONVERT_SMI_ARG_CHECKED(value, 1);
         auto* vals =
-            reinterpret_cast<uint16_t*>(values->GetBuffer()->allocation_base());
+            reinterpret_cast<uint16_t*>(values->GetBuffer()->backing_store());
         vals[index] = static_cast<uint16_t>(value);
       }
     }
@@ -248,7 +244,7 @@ RUNTIME_FUNCTION(Runtime_WasmRunInterpreter) {
 
   // Set the current isolate's context.
   DCHECK_NULL(isolate->context());
-  isolate->set_context(instance->compiled_module()->ptr_to_native_context());
+  isolate->set_context(instance->compiled_module()->native_context());
 
   // Find the frame pointer of the interpreter entry.
   Address frame_pointer = 0;
@@ -275,7 +271,8 @@ RUNTIME_FUNCTION(Runtime_WasmRunInterpreter) {
 RUNTIME_FUNCTION(Runtime_WasmStackGuard) {
   SealHandleScope shs(isolate);
   DCHECK_EQ(0, args.length());
-  DCHECK(!trap_handler::UseTrapHandler() || trap_handler::IsThreadInWasm());
+  DCHECK(!trap_handler::IsTrapHandlerEnabled() ||
+         trap_handler::IsThreadInWasm());
 
   ClearThreadInWasmScope wasm_flag(true);
 
@@ -290,19 +287,17 @@ RUNTIME_FUNCTION(Runtime_WasmStackGuard) {
   return isolate->stack_guard()->HandleInterrupts();
 }
 
-RUNTIME_FUNCTION(Runtime_WasmCompileLazy) {
-  DCHECK_EQ(0, args.length());
+RUNTIME_FUNCTION_RETURN_PAIR(Runtime_WasmCompileLazy) {
+  DCHECK_EQ(1, args.length());
+  CONVERT_ARG_HANDLE_CHECKED(WasmInstanceObject, instance_on_stack, 0);
+  // TODO(titzer): The location on the stack is not visited by the
+  // roots visitor because the type of the frame is a special
+  // WASM builtin. Reopen the handle in a handle scope as a workaround.
   HandleScope scope(isolate);
+  Handle<WasmInstanceObject> instance(*instance_on_stack, isolate);
 
-  if (FLAG_wasm_jit_to_native) {
-    Address new_func = wasm::CompileLazy(isolate);
-    // The alternative to this is having 2 lazy compile builtins. The builtins
-    // are part of the snapshot, so the flag has no impact on the codegen there.
-    return reinterpret_cast<Object*>(new_func - Code::kHeaderSize +
-                                     kHeapObjectTag);
-  } else {
-    return *wasm::CompileLazyOnGCHeap(isolate);
-  }
+  Address entrypoint = wasm::CompileLazy(isolate, instance);
+  return MakePair(reinterpret_cast<Object*>(entrypoint), *instance);
 }
 
 }  // namespace internal

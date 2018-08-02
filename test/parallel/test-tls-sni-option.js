@@ -24,9 +24,6 @@ const common = require('../common');
 if (!common.hasCrypto)
   common.skip('missing crypto');
 
-if (!process.features.tls_sni)
-  common.skip('node compiled without OpenSSL or with old OpenSSL version.');
-
 const assert = require('assert');
 const tls = require('tls');
 const fixtures = require('../common/fixtures');
@@ -175,7 +172,9 @@ process.on('exit', function() {
   ]);
   assert.deepStrictEqual(clientResults, [true, true, true, false, false]);
   assert.deepStrictEqual(clientErrors, [
-    null, null, null, null, 'socket hang up'
+    null, null, null, null,
+    'Client network socket disconnected before secure TLS ' +
+    'connection was established'
   ]);
   assert.deepStrictEqual(serverErrors, [
     null, null, null, null, 'Invalid SNI context'

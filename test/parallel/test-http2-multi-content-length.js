@@ -31,8 +31,8 @@ server.listen(0, common.mustCall(() => {
       });
     }, {
       code: 'ERR_HTTP2_HEADER_SINGLE_VALUE',
-      type: Error,
-      message: 'Header field "content-length" must have only a single value'
+      type: TypeError,
+      message: 'Header field "content-length" must only have a single value'
     }
   );
 
@@ -58,7 +58,7 @@ server.listen(0, common.mustCall(() => {
     req.on('error', common.expectsError({
       code: 'ERR_HTTP2_STREAM_ERROR',
       type: Error,
-      message: 'Stream closed with error code 1'
+      message: 'Stream closed with error code NGHTTP2_PROTOCOL_ERROR'
     }));
   }
 }));

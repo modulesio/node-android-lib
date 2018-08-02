@@ -27,7 +27,6 @@
 #include "async_wrap.h"
 #include "env.h"
 #include "handle_wrap.h"
-#include "req_wrap-inl.h"
 #include "uv.h"
 #include "v8.h"
 
@@ -65,7 +64,11 @@ class UDPWrap: public HandleWrap {
                                            SocketType type);
   uv_udp_t* UVHandle();
 
-  size_t self_size() const override { return sizeof(*this); }
+  void MemoryInfo(MemoryTracker* tracker) const override {
+    tracker->TrackThis(this);
+  }
+
+  ADD_MEMORY_INFO_NAME(UDPWrap)
 
  private:
   typedef uv_udp_t HandleType;

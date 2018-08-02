@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "src/compiler/types.h"
-#include "src/factory-inl.h"
+#include "src/heap/factory-inl.h"
 #include "src/heap/heap.h"
 #include "src/isolate.h"
 #include "src/objects.h"
@@ -111,7 +111,7 @@ struct Tests {
     CHECK(this->IsBitset(T.Any));
 
     CHECK(bitset(0) == this->AsBitset(T.None));
-    CHECK(bitset(0xfffffffeu) == this->AsBitset(T.Any));
+    CHECK(bitset(0xFFFFFFFEu) == this->AsBitset(T.Any));
 
     // Union(T1, T2) is bitset for bitsets T1,T2
     for (TypeIterator it1 = T.types.begin(); it1 != T.types.end(); ++it1) {
@@ -224,38 +224,38 @@ struct Tests {
     Factory* fac = isolate->factory();
     CHECK(T.NewConstant(fac->NewNumber(0))->Is(T.UnsignedSmall));
     CHECK(T.NewConstant(fac->NewNumber(1))->Is(T.UnsignedSmall));
-    CHECK(T.NewConstant(fac->NewNumber(0x3fffffff))->Is(T.UnsignedSmall));
+    CHECK(T.NewConstant(fac->NewNumber(0x3FFFFFFF))->Is(T.UnsignedSmall));
     CHECK(T.NewConstant(fac->NewNumber(-1))->Is(T.Negative31));
-    CHECK(T.NewConstant(fac->NewNumber(-0x3fffffff))->Is(T.Negative31));
+    CHECK(T.NewConstant(fac->NewNumber(-0x3FFFFFFF))->Is(T.Negative31));
     CHECK(T.NewConstant(fac->NewNumber(-0x40000000))->Is(T.Negative31));
     CHECK(T.NewConstant(fac->NewNumber(0x40000000))->Is(T.Unsigned31));
     CHECK(!T.NewConstant(fac->NewNumber(0x40000000))->Is(T.Unsigned30));
-    CHECK(T.NewConstant(fac->NewNumber(0x7fffffff))->Is(T.Unsigned31));
-    CHECK(!T.NewConstant(fac->NewNumber(0x7fffffff))->Is(T.Unsigned30));
+    CHECK(T.NewConstant(fac->NewNumber(0x7FFFFFFF))->Is(T.Unsigned31));
+    CHECK(!T.NewConstant(fac->NewNumber(0x7FFFFFFF))->Is(T.Unsigned30));
     CHECK(T.NewConstant(fac->NewNumber(-0x40000001))->Is(T.Negative32));
     CHECK(!T.NewConstant(fac->NewNumber(-0x40000001))->Is(T.Negative31));
-    CHECK(T.NewConstant(fac->NewNumber(-0x7fffffff))->Is(T.Negative32));
-    CHECK(!T.NewConstant(fac->NewNumber(-0x7fffffff - 1))->Is(T.Negative31));
+    CHECK(T.NewConstant(fac->NewNumber(-0x7FFFFFFF))->Is(T.Negative32));
+    CHECK(!T.NewConstant(fac->NewNumber(-0x7FFFFFFF - 1))->Is(T.Negative31));
     if (SmiValuesAre31Bits()) {
       CHECK(!T.NewConstant(fac->NewNumber(0x40000000))->Is(T.UnsignedSmall));
-      CHECK(!T.NewConstant(fac->NewNumber(0x7fffffff))->Is(T.UnsignedSmall));
+      CHECK(!T.NewConstant(fac->NewNumber(0x7FFFFFFF))->Is(T.UnsignedSmall));
       CHECK(!T.NewConstant(fac->NewNumber(-0x40000001))->Is(T.SignedSmall));
-      CHECK(!T.NewConstant(fac->NewNumber(-0x7fffffff - 1))->Is(T.SignedSmall));
+      CHECK(!T.NewConstant(fac->NewNumber(-0x7FFFFFFF - 1))->Is(T.SignedSmall));
     } else {
       CHECK(SmiValuesAre32Bits());
       CHECK(T.NewConstant(fac->NewNumber(0x40000000))->Is(T.UnsignedSmall));
-      CHECK(T.NewConstant(fac->NewNumber(0x7fffffff))->Is(T.UnsignedSmall));
+      CHECK(T.NewConstant(fac->NewNumber(0x7FFFFFFF))->Is(T.UnsignedSmall));
       CHECK(T.NewConstant(fac->NewNumber(-0x40000001))->Is(T.SignedSmall));
-      CHECK(T.NewConstant(fac->NewNumber(-0x7fffffff - 1))->Is(T.SignedSmall));
+      CHECK(T.NewConstant(fac->NewNumber(-0x7FFFFFFF - 1))->Is(T.SignedSmall));
     }
     CHECK(T.NewConstant(fac->NewNumber(0x80000000u))->Is(T.Unsigned32));
     CHECK(!T.NewConstant(fac->NewNumber(0x80000000u))->Is(T.Unsigned31));
-    CHECK(T.NewConstant(fac->NewNumber(0xffffffffu))->Is(T.Unsigned32));
-    CHECK(!T.NewConstant(fac->NewNumber(0xffffffffu))->Is(T.Unsigned31));
-    CHECK(T.NewConstant(fac->NewNumber(0xffffffffu + 1.0))->Is(T.PlainNumber));
-    CHECK(!T.NewConstant(fac->NewNumber(0xffffffffu + 1.0))->Is(T.Integral32));
-    CHECK(T.NewConstant(fac->NewNumber(-0x7fffffff - 2.0))->Is(T.PlainNumber));
-    CHECK(!T.NewConstant(fac->NewNumber(-0x7fffffff - 2.0))->Is(T.Integral32));
+    CHECK(T.NewConstant(fac->NewNumber(0xFFFFFFFFu))->Is(T.Unsigned32));
+    CHECK(!T.NewConstant(fac->NewNumber(0xFFFFFFFFu))->Is(T.Unsigned31));
+    CHECK(T.NewConstant(fac->NewNumber(0xFFFFFFFFu + 1.0))->Is(T.PlainNumber));
+    CHECK(!T.NewConstant(fac->NewNumber(0xFFFFFFFFu + 1.0))->Is(T.Integral32));
+    CHECK(T.NewConstant(fac->NewNumber(-0x7FFFFFFF - 2.0))->Is(T.PlainNumber));
+    CHECK(!T.NewConstant(fac->NewNumber(-0x7FFFFFFF - 2.0))->Is(T.Integral32));
     CHECK(T.NewConstant(fac->NewNumber(0.1))->Is(T.PlainNumber));
     CHECK(!T.NewConstant(fac->NewNumber(0.1))->Is(T.Integral32));
     CHECK(T.NewConstant(fac->NewNumber(-10.1))->Is(T.PlainNumber));
@@ -273,11 +273,11 @@ struct Tests {
 
     // Typing of Strings
     Handle<String> s1 = fac->NewStringFromAsciiChecked("a");
-    CHECK(T.NewConstant(s1)->Is(T.InternalizedSeqString));
+    CHECK(T.NewConstant(s1)->Is(T.InternalizedString));
     const uc16 two_byte[1] = {0x2603};
     Handle<String> s2 =
         fac->NewTwoByteInternalizedString(Vector<const uc16>(two_byte, 1), 1);
-    CHECK(T.NewConstant(s2)->Is(T.InternalizedSeqString));
+    CHECK(T.NewConstant(s2)->Is(T.InternalizedString));
   }
 
   void Range() {
@@ -621,14 +621,9 @@ struct Tests {
 
     CheckSub(T.UniqueName, T.Name);
     CheckSub(T.String, T.Name);
-    CheckSub(T.InternalizedSeqString, T.InternalizedString);
-    CheckSub(T.InternalizedNonSeqString, T.InternalizedString);
     CheckSub(T.InternalizedString, T.String);
     CheckSub(T.InternalizedString, T.UniqueName);
     CheckSub(T.InternalizedString, T.Name);
-    CheckSub(T.OtherSeqString, T.OtherString);
-    CheckSub(T.OtherNonSeqString, T.OtherString);
-    CheckSub(T.OtherString, T.String);
     CheckSub(T.Symbol, T.UniqueName);
     CheckSub(T.Symbol, T.Name);
     CheckUnordered(T.String, T.UniqueName);
@@ -750,15 +745,10 @@ struct Tests {
     CheckOverlap(T.NaN, T.Number);
     CheckDisjoint(T.Signed32, T.NaN);
     CheckOverlap(T.UniqueName, T.Name);
-    CheckOverlap(T.InternalizedNonSeqString, T.InternalizedString);
-    CheckOverlap(T.InternalizedSeqString, T.InternalizedString);
-    CheckOverlap(T.OtherNonSeqString, T.OtherString);
-    CheckOverlap(T.OtherSeqString, T.OtherString);
     CheckOverlap(T.String, T.Name);
     CheckOverlap(T.InternalizedString, T.String);
     CheckOverlap(T.InternalizedString, T.UniqueName);
     CheckOverlap(T.InternalizedString, T.Name);
-    CheckOverlap(T.OtherString, T.String);
     CheckOverlap(T.Symbol, T.UniqueName);
     CheckOverlap(T.Symbol, T.Name);
     CheckOverlap(T.String, T.UniqueName);

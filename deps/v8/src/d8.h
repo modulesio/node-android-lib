@@ -149,28 +149,36 @@ class SourceGroup {
 class ExternalizedContents {
  public:
   explicit ExternalizedContents(const ArrayBuffer::Contents& contents)
-      : data_(contents.Data()), size_(contents.ByteLength()) {}
+      : base_(contents.AllocationBase()),
+        length_(contents.AllocationLength()),
+        mode_(contents.AllocationMode()) {}
   explicit ExternalizedContents(const SharedArrayBuffer::Contents& contents)
-      : data_(contents.Data()), size_(contents.ByteLength()) {}
+      : base_(contents.AllocationBase()),
+        length_(contents.AllocationLength()),
+        mode_(contents.AllocationMode()) {}
   ExternalizedContents(ExternalizedContents&& other)
-      : data_(other.data_), size_(other.size_) {
-    other.data_ = nullptr;
-    other.size_ = 0;
+      : base_(other.base_), length_(other.length_), mode_(other.mode_) {
+    other.base_ = nullptr;
+    other.length_ = 0;
+    other.mode_ = ArrayBuffer::Allocator::AllocationMode::kNormal;
   }
   ExternalizedContents& operator=(ExternalizedContents&& other) {
     if (this != &other) {
-      data_ = other.data_;
-      size_ = other.size_;
-      other.data_ = nullptr;
-      other.size_ = 0;
+      base_ = other.base_;
+      length_ = other.length_;
+      mode_ = other.mode_;
+      other.base_ = nullptr;
+      other.length_ = 0;
+      other.mode_ = ArrayBuffer::Allocator::AllocationMode::kNormal;
     }
     return *this;
   }
   ~ExternalizedContents();
 
  private:
-  void* data_;
-  size_t size_;
+  void* base_;
+  size_t length_;
+  ArrayBuffer::Allocator::AllocationMode mode_;
 
   DISALLOW_COPY_AND_ASSIGN(ExternalizedContents);
 };
@@ -189,12 +197,6 @@ class SerializationData {
     return shared_array_buffer_contents_;
   }
 
-  void AppendExternalizedContentsTo(std::vector<ExternalizedContents>* to) {
-    to->insert(to->end(),
-               std::make_move_iterator(externalized_contents_.begin()),
-               std::make_move_iterator(externalized_contents_.end()));
-    externalized_contents_.clear();
-  }
 
  private:
   struct DataDeleter {
@@ -205,7 +207,6 @@ class SerializationData {
   size_t size_;
   std::vector<ArrayBuffer::Contents> array_buffer_contents_;
   std::vector<SharedArrayBuffer::Contents> shared_array_buffer_contents_;
-  std::vector<ExternalizedContents> externalized_contents_;
 
  private:
   friend class Serializer;
@@ -280,11 +281,18 @@ class Worker {
 
 class ShellOptions {
  public:
+  enum CodeCacheOptions {
+    kNoProduceCache,
+    kProduceCache,
+    kProduceCacheAfterExecute
+  };
+
   ShellOptions()
       : script_executed(false),
         send_idle_notification(false),
         invoke_weak_callbacks(false),
         omit_quit(false),
+        wait_for_wasm(true),
         stress_opt(false),
         stress_deopt(false),
         stress_runs(1),
@@ -296,11 +304,13 @@ class ShellOptions {
         num_isolates(1),
         compile_options(v8::ScriptCompiler::kNoCompileOptions),
         stress_background_compile(false),
+        code_cache_options(CodeCacheOptions::kNoProduceCache),
         isolate_sources(nullptr),
         icu_data_file(nullptr),
         natives_blob(nullptr),
         snapshot_blob(nullptr),
         trace_enabled(false),
+        trace_path(nullptr),
         trace_config(nullptr),
         lcov_file(nullptr),
         disable_in_process_stack_traces(false),
@@ -318,6 +328,7 @@ class ShellOptions {
   bool send_idle_notification;
   bool invoke_weak_callbacks;
   bool omit_quit;
+  bool wait_for_wasm;
   bool stress_opt;
   bool stress_deopt;
   int stress_runs;
@@ -329,27 +340,38 @@ class ShellOptions {
   int num_isolates;
   v8::ScriptCompiler::CompileOptions compile_options;
   bool stress_background_compile;
+  CodeCacheOptions code_cache_options;
   SourceGroup* isolate_sources;
   const char* icu_data_file;
   const char* natives_blob;
   const char* snapshot_blob;
   bool trace_enabled;
+  const char* trace_path;
   const char* trace_config;
   const char* lcov_file;
   bool disable_in_process_stack_traces;
   int read_from_tcp_port;
   bool enable_os_system = false;
   bool quiet_load = false;
+  int thread_pool_size = 0;
 };
 
 class Shell : public i::AllStatic {
  public:
-  static MaybeLocal<Script> CompileString(
-      Isolate* isolate, Local<String> source, Local<Value> name,
-      v8::ScriptCompiler::CompileOptions compile_options);
+  enum PrintResult : bool { kPrintResult = true, kNoPrintResult = false };
+  enum ReportExceptions : bool {
+    kReportExceptions = true,
+    kNoReportExceptions = false
+  };
+  enum ProcessMessageQueue : bool {
+    kProcessMessageQueue = true,
+    kNoProcessMessageQueue = false
+  };
+
   static bool ExecuteString(Isolate* isolate, Local<String> source,
-                            Local<Value> name, bool print_result,
-                            bool report_exceptions);
+                            Local<Value> name, PrintResult print_result,
+                            ReportExceptions report_exceptions,
+                            ProcessMessageQueue process_message_queue);
   static bool ExecuteModule(Isolate* isolate, const char* file_name);
   static void ReportException(Isolate* isolate, TryCatch* try_catch);
   static Local<String> ReadFile(Isolate* isolate, const char* name);
@@ -360,7 +382,6 @@ class Shell : public i::AllStatic {
   static void OnExit(Isolate* isolate);
   static void CollectGarbage(Isolate* isolate);
   static bool EmptyMessageQueues(Isolate* isolate);
-  static void EnsureEventLoopInitialized(Isolate* isolate);
   static void CompleteMessageLoop(Isolate* isolate);
 
   static std::unique_ptr<SerializationData> SerializeValue(
@@ -504,10 +525,18 @@ class Shell : public i::AllStatic {
                            int index);
   static MaybeLocal<Module> FetchModuleTree(v8::Local<v8::Context> context,
                                             const std::string& file_name);
+  static ScriptCompiler::CachedData* LookupCodeCache(Isolate* isolate,
+                                                     Local<Value> name);
+  static void StoreInCodeCache(Isolate* isolate, Local<Value> name,
+                               const ScriptCompiler::CachedData* data);
   // We may have multiple isolates running concurrently, so the access to
   // the isolate_status_ needs to be concurrency-safe.
   static base::LazyMutex isolate_status_lock_;
   static std::map<Isolate*, bool> isolate_status_;
+
+  static base::LazyMutex cached_code_mutex_;
+  static std::map<std::string, std::unique_ptr<ScriptCompiler::CachedData>>
+      cached_code_map_;
 };
 
 

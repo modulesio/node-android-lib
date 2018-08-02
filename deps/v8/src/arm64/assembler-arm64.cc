@@ -147,9 +147,6 @@ CPURegList CPURegList::GetSafepointSavedRegisters() {
   // is a caller-saved register according to the procedure call standard.
   list.Combine(18);
 
-  // Drop jssp as the stack pointer doesn't need to be included.
-  list.Remove(28);
-
   // Add the link register (x30) to the safepoint list.
   list.Combine(30);
 
@@ -184,21 +181,20 @@ uint32_t RelocInfo::embedded_size() const {
   return Memory::uint32_at(Assembler::target_pointer_address_at(pc_));
 }
 
-void RelocInfo::set_embedded_address(Isolate* isolate, Address address,
+void RelocInfo::set_embedded_address(Address address,
                                      ICacheFlushMode flush_mode) {
-  Assembler::set_target_address_at(isolate, pc_, host_, address, flush_mode);
+  Assembler::set_target_address_at(pc_, constant_pool_, address, flush_mode);
 }
 
-void RelocInfo::set_embedded_size(Isolate* isolate, uint32_t size,
-                                  ICacheFlushMode flush_mode) {
+void RelocInfo::set_embedded_size(uint32_t size, ICacheFlushMode flush_mode) {
   Memory::uint32_at(Assembler::target_pointer_address_at(pc_)) = size;
   // No icache flushing needed, see comment in set_target_address_at.
 }
 
-void RelocInfo::set_js_to_wasm_address(Isolate* isolate, Address address,
+void RelocInfo::set_js_to_wasm_address(Address address,
                                        ICacheFlushMode icache_flush_mode) {
   DCHECK_EQ(rmode_, JS_TO_WASM_CALL);
-  set_embedded_address(isolate, address, icache_flush_mode);
+  set_embedded_address(address, icache_flush_mode);
 }
 
 Address RelocInfo::js_to_wasm_address() const {
@@ -469,9 +465,6 @@ void ConstPool::Clear() {
 
 
 bool ConstPool::CanBeShared(RelocInfo::Mode mode) {
-  // Constant pool currently does not support 32-bit entries.
-  DCHECK(mode != RelocInfo::NONE32);
-
   return RelocInfo::IsNone(mode) ||
          (mode >= RelocInfo::FIRST_SHAREABLE_RELOC_MODE);
 }
@@ -1756,7 +1749,6 @@ void Assembler::stlr(const Register& rt, const Register& rn) {
 
 void Assembler::stlxr(const Register& rs, const Register& rt,
                       const Register& rn) {
-  DCHECK(rs.Is32Bits());
   DCHECK(rn.Is64Bits());
   DCHECK(!rs.Is(rt) && !rs.Is(rn));
   LoadStoreAcquireReleaseOp op = rt.Is32Bits() ? STLXR_w : STLXR_x;
@@ -2636,7 +2628,7 @@ Instr Assembler::LoadStoreStructAddrModeField(const MemOperand& addr) {
     } else {
       // The immediate post index addressing mode is indicated by rm = 31.
       // The immediate is implied by the number of vector registers used.
-      addr_field |= (0x1f << Rm_offset);
+      addr_field |= (0x1F << Rm_offset);
     }
   } else {
     DCHECK(addr.IsImmediateOffset() && (addr.offset() == 0));
@@ -2996,6 +2988,8 @@ void Assembler::isb() {
   Emit(ISB | ImmBarrierDomain(FullSystem) | ImmBarrierType(BarrierAll));
 }
 
+void Assembler::csdb() { hint(CSDB); }
+
 void Assembler::fmov(const VRegister& vd, double imm) {
   if (vd.IsScalar()) {
     DCHECK(vd.Is1D());
@@ -3003,7 +2997,7 @@ void Assembler::fmov(const VRegister& vd, double imm) {
   } else {
     DCHECK(vd.Is2D());
     Instr op = NEONModifiedImmediate_MOVI | NEONModifiedImmediateOpBit;
-    Emit(NEON_Q | op | ImmNEONFP(imm) | NEONCmode(0xf) | Rd(vd));
+    Emit(NEON_Q | op | ImmNEONFP(imm) | NEONCmode(0xF) | Rd(vd));
   }
 }
 
@@ -3015,7 +3009,7 @@ void Assembler::fmov(const VRegister& vd, float imm) {
     DCHECK(vd.Is2S() | vd.Is4S());
     Instr op = NEONModifiedImmediate_MOVI;
     Instr q = vd.Is4S() ? NEON_Q : 0;
-    Emit(q | op | ImmNEONFP(imm) | NEONCmode(0xf) | Rd(vd));
+    Emit(q | op | ImmNEONFP(imm) | NEONCmode(0xF) | Rd(vd));
   }
 }
 
@@ -3596,15 +3590,15 @@ void Assembler::movi(const VRegister& vd, const uint64_t imm, Shift shift,
     DCHECK_EQ(shift_amount, 0);
     int imm8 = 0;
     for (int i = 0; i < 8; ++i) {
-      int byte = (imm >> (i * 8)) & 0xff;
-      DCHECK((byte == 0) || (byte == 0xff));
-      if (byte == 0xff) {
+      int byte = (imm >> (i * 8)) & 0xFF;
+      DCHECK((byte == 0) || (byte == 0xFF));
+      if (byte == 0xFF) {
         imm8 |= (1 << i);
       }
     }
     Instr q = vd.Is2D() ? NEON_Q : 0;
     Emit(q | NEONModImmOp(1) | NEONModifiedImmediate_MOVI |
-         ImmNEONabcdefgh(imm8) | NEONCmode(0xe) | Rd(vd));
+         ImmNEONabcdefgh(imm8) | NEONCmode(0xE) | Rd(vd));
   } else if (shift == LSL) {
     NEONModifiedImmShiftLsl(vd, static_cast<int>(imm), shift_amount,
                             NEONModifiedImmediate_MOVI);
@@ -3953,7 +3947,7 @@ uint32_t Assembler::FPToImm8(double imm) {
   // bit6: 0b00.0000
   uint64_t bit6 = ((bits >> 61) & 0x1) << 6;
   // bit5_to_0: 00cd.efgh
-  uint64_t bit5_to_0 = (bits >> 48) & 0x3f;
+  uint64_t bit5_to_0 = (bits >> 48) & 0x3F;
 
   return static_cast<uint32_t>(bit7 | bit6 | bit5_to_0);
 }
@@ -3971,7 +3965,7 @@ void Assembler::MoveWide(const Register& rd, uint64_t imm, int shift,
     // Check that the top 32 bits are zero (a positive 32-bit number) or top
     // 33 bits are one (a negative 32-bit number, sign extended to 64 bits).
     DCHECK(((imm >> kWRegSizeInBits) == 0) ||
-           ((imm >> (kWRegSizeInBits - 1)) == 0x1ffffffff));
+           ((imm >> (kWRegSizeInBits - 1)) == 0x1FFFFFFFF));
     imm &= kWRegMask;
   }
 
@@ -3984,16 +3978,16 @@ void Assembler::MoveWide(const Register& rd, uint64_t imm, int shift,
     // Calculate a new immediate and shift combination to encode the immediate
     // argument.
     shift = 0;
-    if ((imm & ~0xffffUL) == 0) {
+    if ((imm & ~0xFFFFUL) == 0) {
       // Nothing to do.
-    } else if ((imm & ~(0xffffUL << 16)) == 0) {
+    } else if ((imm & ~(0xFFFFUL << 16)) == 0) {
       imm >>= 16;
       shift = 1;
-    } else if ((imm & ~(0xffffUL << 32)) == 0) {
+    } else if ((imm & ~(0xFFFFUL << 32)) == 0) {
       DCHECK(rd.Is64Bits());
       imm >>= 32;
       shift = 2;
-    } else if ((imm & ~(0xffffUL << 48)) == 0) {
+    } else if ((imm & ~(0xFFFFUL << 48)) == 0) {
       DCHECK(rd.Is64Bits());
       imm >>= 48;
       shift = 3;
@@ -4247,7 +4241,7 @@ void Assembler::NEONModifiedImmShiftMsl(const VRegister& vd, const int imm8,
   DCHECK(is_uint8(imm8));
 
   int cmode_0 = (shift_amount >> 4) & 1;
-  int cmode = 0xc | cmode_0;
+  int cmode = 0xC | cmode_0;
 
   Instr q = vd.IsQ() ? NEON_Q : 0;
 
@@ -4343,7 +4337,7 @@ void Assembler::DataProcExtendedRegister(const Register& rd,
 
 bool Assembler::IsImmAddSub(int64_t immediate) {
   return is_uint12(immediate) ||
-         (is_uint12(immediate >> 12) && ((immediate & 0xfff) == 0));
+         (is_uint12(immediate >> 12) && ((immediate & 0xFFF) == 0));
 }
 
 void Assembler::LoadStore(const CPURegister& rt,
@@ -4526,7 +4520,7 @@ bool Assembler::IsImmLogical(uint64_t value,
     clz_a = CountLeadingZeros(a, kXRegSizeInBits);
     int clz_c = CountLeadingZeros(c, kXRegSizeInBits);
     d = clz_a - clz_c;
-    mask = ((V8_UINT64_C(1) << d) - 1);
+    mask = ((uint64_t{1} << d) - 1);
     out_n = 0;
   } else {
     // Handle degenerate cases.
@@ -4547,7 +4541,7 @@ bool Assembler::IsImmLogical(uint64_t value,
       // the general case above, and set the N bit in the output.
       clz_a = CountLeadingZeros(a, kXRegSizeInBits);
       d = 64;
-      mask = ~V8_UINT64_C(0);
+      mask = ~uint64_t{0};
       out_n = 1;
     }
   }
@@ -4596,7 +4590,7 @@ bool Assembler::IsImmLogical(uint64_t value,
 
   // Count the set bits in our basic stretch. The special case of clz(0) == -1
   // makes the answer come out right for stretches that reach the very top of
-  // the word (e.g. numbers like 0xffffc00000000000).
+  // the word (e.g. numbers like 0xFFFFC00000000000).
   int clz_b = (b == 0) ? -1 : CountLeadingZeros(b, kXRegSizeInBits);
   int s = clz_a - clz_b;
 
@@ -4628,7 +4622,7 @@ bool Assembler::IsImmLogical(uint64_t value,
   //
   // So we 'or' (-d << 1) with our computed s to form imms.
   *n = out_n;
-  *imm_s = ((-d << 1) | (s - 1)) & 0x3f;
+  *imm_s = ((-d << 1) | (s - 1)) & 0x3F;
   *imm_r = r;
 
   return true;
@@ -4645,13 +4639,13 @@ bool Assembler::IsImmFP32(float imm) {
   // aBbb.bbbc.defg.h000.0000.0000.0000.0000
   uint32_t bits = bit_cast<uint32_t>(imm);
   // bits[19..0] are cleared.
-  if ((bits & 0x7ffff) != 0) {
+  if ((bits & 0x7FFFF) != 0) {
     return false;
   }
 
   // bits[29..25] are all set or all cleared.
-  uint32_t b_pattern = (bits >> 16) & 0x3e00;
-  if (b_pattern != 0 && b_pattern != 0x3e00) {
+  uint32_t b_pattern = (bits >> 16) & 0x3E00;
+  if (b_pattern != 0 && b_pattern != 0x3E00) {
     return false;
   }
 
@@ -4670,13 +4664,13 @@ bool Assembler::IsImmFP64(double imm) {
   // 0000.0000.0000.0000.0000.0000.0000.0000
   uint64_t bits = bit_cast<uint64_t>(imm);
   // bits[47..0] are cleared.
-  if ((bits & 0xffffffffffffL) != 0) {
+  if ((bits & 0xFFFFFFFFFFFFL) != 0) {
     return false;
   }
 
   // bits[61..54] are all set or all cleared.
-  uint32_t b_pattern = (bits >> 48) & 0x3fc0;
-  if (b_pattern != 0 && b_pattern != 0x3fc0) {
+  uint32_t b_pattern = (bits >> 48) & 0x3FC0;
+  if (b_pattern != 0 && b_pattern != 0x3FC0) {
     return false;
   }
 
@@ -4703,7 +4697,7 @@ void Assembler::GrowBuffer() {
   // Some internal data structures overflow for very large buffers,
   // they must ensure that kMaximalBufferSize is not too large.
   if (desc.buffer_size > kMaximalBufferSize) {
-    V8::FatalProcessOutOfMemory("Assembler::GrowBuffer");
+    V8::FatalProcessOutOfMemory(nullptr, "Assembler::GrowBuffer");
   }
 
   byte* buffer = reinterpret_cast<byte*>(buffer_);
@@ -4747,6 +4741,9 @@ void Assembler::GrowBuffer() {
 
 
 void Assembler::RecordRelocInfo(RelocInfo::Mode rmode, intptr_t data) {
+  // Non-relocatable constants should not end up in the literal pool.
+  DCHECK(!RelocInfo::IsNone(rmode));
+
   // We do not try to reuse pool constants.
   RelocInfo rinfo(reinterpret_cast<byte*>(pc_), rmode, data, nullptr);
   bool write_reloc_info = true;

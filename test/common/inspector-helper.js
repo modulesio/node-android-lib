@@ -7,6 +7,7 @@ const fixtures = require('../common/fixtures');
 const { spawn } = require('child_process');
 const { parse: parseURL } = require('url');
 const { getURLFromFilePath } = require('internal/url');
+const { EventEmitter } = require('events');
 
 const _MAINSCRIPT = fixtures.path('loop.js');
 const DEBUG = false;
@@ -24,6 +25,7 @@ function spawnChildProcess(inspectorFlags, scriptContents, scriptFile) {
   const handler = tearDown.bind(null, child);
   process.on('exit', handler);
   process.on('uncaughtException', handler);
+  common.disableCrashOnUnhandledRejection();
   process.on('unhandledRejection', handler);
   process.on('SIGINT', handler);
 
@@ -154,8 +156,9 @@ class InspectorSession {
     return this._terminationPromise;
   }
 
-  disconnect() {
+  async disconnect() {
     this._socket.destroy();
+    return this.waitForServerDisconnect();
   }
 
   _onMessage(message) {
@@ -168,9 +171,7 @@ class InspectorSession {
         reject(message.error);
     } else {
       if (message.method === 'Debugger.scriptParsed') {
-        const script = message['params'];
-        const scriptId = script['scriptId'];
-        const url = script['url'];
+        const { scriptId, url } = message.params;
         this._scriptsIdsByUrl.set(scriptId, url);
         const fileUrl = url.startsWith('file:') ?
           url : getURLFromFilePath(url).toString();
@@ -192,12 +193,12 @@ class InspectorSession {
 
   _sendMessage(message) {
     const msg = JSON.parse(JSON.stringify(message)); // Clone!
-    msg['id'] = this._nextId++;
+    msg.id = this._nextId++;
     if (DEBUG)
       console.log('[sent]', JSON.stringify(msg));
 
     const responsePromise = new Promise((resolve, reject) => {
-      this._commandResponsePromises.set(msg['id'], { resolve, reject });
+      this._commandResponsePromises.set(msg.id, { resolve, reject });
     });
 
     return new Promise(
@@ -243,14 +244,14 @@ class InspectorSession {
   }
 
   _isBreakOnLineNotification(message, line, expectedScriptPath) {
-    if ('Debugger.paused' === message['method']) {
-      const callFrame = message['params']['callFrames'][0];
-      const location = callFrame['location'];
-      const scriptPath = this._scriptsIdsByUrl.get(location['scriptId']);
+    if (message.method === 'Debugger.paused') {
+      const callFrame = message.params.callFrames[0];
+      const location = callFrame.location;
+      const scriptPath = this._scriptsIdsByUrl.get(location.scriptId);
       assert.strictEqual(scriptPath.toString(),
                          expectedScriptPath.toString(),
                          `${scriptPath} !== ${expectedScriptPath}`);
-      assert.strictEqual(line, location['lineNumber']);
+      assert.strictEqual(line, location.lineNumber);
       return true;
     }
   }
@@ -266,12 +267,12 @@ class InspectorSession {
   _matchesConsoleOutputNotification(notification, type, values) {
     if (!Array.isArray(values))
       values = [ values ];
-    if ('Runtime.consoleAPICalled' === notification['method']) {
-      const params = notification['params'];
-      if (params['type'] === type) {
+    if (notification.method === 'Runtime.consoleAPICalled') {
+      const params = notification.params;
+      if (params.type === type) {
         let i = 0;
-        for (const value of params['args']) {
-          if (value['value'] !== values[i++])
+        for (const value of params.args) {
+          if (value.value !== values[i++])
             return false;
         }
         return i === values.length;
@@ -312,10 +313,12 @@ class InspectorSession {
   }
 }
 
-class NodeInstance {
+class NodeInstance extends EventEmitter {
   constructor(inspectorFlags = ['--inspect-brk=0'],
               scriptContents = '',
               scriptFile = _MAINSCRIPT) {
+    super();
+
     this._scriptPath = scriptFile;
     this._script = scriptFile ? null : scriptContents;
     this._portCallback = null;
@@ -327,7 +330,10 @@ class NodeInstance {
     this._unprocessedStderrLines = [];
 
     this._process.stdout.on('data', makeBufferingDataCallback(
-      (line) => console.log('[out]', line)));
+      (line) => {
+        this.emit('stdout', line);
+        console.log('[out]', line);
+      }));
 
     this._process.stderr.on('data', makeBufferingDataCallback(
       (message) => this.onStderrLine(message)));
@@ -367,10 +373,11 @@ class NodeInstance {
     }
   }
 
-  httpGet(host, path) {
+  httpGet(host, path, hostHeaderValue) {
     console.log('[test]', `Testing ${path}`);
+    const headers = hostHeaderValue ? { 'Host': hostHeaderValue } : null;
     return this.portPromise.then((port) => new Promise((resolve, reject) => {
-      const req = http.get({ host, port, path }, (res) => {
+      const req = http.get({ host, port, path, headers }, (res) => {
         let response = '';
         res.setEncoding('utf8');
         res
@@ -392,7 +399,7 @@ class NodeInstance {
 
   async sendUpgradeRequest() {
     const response = await this.httpGet(null, '/json/list');
-    const devtoolsUrl = response[0]['webSocketDebuggerUrl'];
+    const devtoolsUrl = response[0].webSocketDebuggerUrl;
     const port = await this.portPromise;
     return http.get({
       port,
@@ -445,6 +452,7 @@ class NodeInstance {
 
   kill() {
     this._process.kill();
+    return this.expectShutdown();
   }
 
   scriptPath() {

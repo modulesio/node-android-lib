@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef V8_BUILTINS_BUILTINS_REGEXP_H_
-#define V8_BUILTINS_BUILTINS_REGEXP_H_
+#ifndef V8_BUILTINS_BUILTINS_REGEXP_GEN_H_
+#define V8_BUILTINS_BUILTINS_REGEXP_GEN_H_
 
 #include "src/code-stub-assembler.h"
 
@@ -18,6 +18,19 @@ class RegExpBuiltinsAssembler : public CodeStubAssembler {
   void BranchIfFastRegExp(Node* const context, Node* const object,
                           Node* const map, Label* const if_isunmodified,
                           Label* const if_ismodified);
+
+  // Create and initialize a RegExp object.
+  TNode<Object> RegExpCreate(TNode<Context> context,
+                             TNode<Context> native_context,
+                             TNode<Object> regexp_string, TNode<String> flags);
+
+  TNode<Object> RegExpCreate(TNode<Context> context, TNode<Map> initial_map,
+                             TNode<Object> regexp_string, TNode<String> flags);
+
+  TNode<Object> MatchAllIterator(TNode<Context> context,
+                                 TNode<Context> native_context,
+                                 TNode<Object> regexp, TNode<Object> string,
+                                 char const* method_name);
 
  protected:
   // Allocate a RegExpResult with the given length (the number of captures,
@@ -50,7 +63,7 @@ class RegExpBuiltinsAssembler : public CodeStubAssembler {
 
   Node* ConstructNewResultFromMatchInfo(Node* const context, Node* const regexp,
                                         Node* const match_info,
-                                        Node* const string);
+                                        TNode<String> const string);
 
   Node* RegExpPrototypeExecBodyWithoutResult(Node* const context,
                                              Node* const regexp,
@@ -58,7 +71,7 @@ class RegExpBuiltinsAssembler : public CodeStubAssembler {
                                              Label* if_didnotmatch,
                                              const bool is_fastpath);
   Node* RegExpPrototypeExecBody(Node* const context, Node* const regexp,
-                                Node* const string, const bool is_fastpath);
+                                TNode<String> string, const bool is_fastpath);
 
   Node* ThrowIfNotJSReceiver(Node* context, Node* maybe_receiver,
                              MessageTemplate::Template msg_template,
@@ -100,7 +113,8 @@ class RegExpBuiltinsAssembler : public CodeStubAssembler {
                            Node* const is_unicode, bool is_fastpath);
 
   void RegExpPrototypeMatchBody(Node* const context, Node* const regexp,
-                                Node* const string, const bool is_fastpath);
+                                TNode<String> const string,
+                                const bool is_fastpath);
 
   void RegExpPrototypeSearchBodyFast(Node* const context, Node* const regexp,
                                      Node* const string);
@@ -108,15 +122,16 @@ class RegExpBuiltinsAssembler : public CodeStubAssembler {
                                      Node* const string);
 
   void RegExpPrototypeSplitBody(Node* const context, Node* const regexp,
-                                Node* const string, Node* const limit);
+                                TNode<String> const string, Node* const limit);
 
   Node* ReplaceGlobalCallableFastPath(Node* context, Node* regexp, Node* string,
                                       Node* replace_callable);
-  Node* ReplaceSimpleStringFastPath(Node* context, Node* regexp, Node* string,
-                                    Node* replace_string);
+  Node* ReplaceSimpleStringFastPath(Node* context, Node* regexp,
+                                    TNode<String> string,
+                                    TNode<String> replace_string);
 };
 
 }  // namespace internal
 }  // namespace v8
 
-#endif  // V8_BUILTINS_BUILTINS_REGEXP_H_
+#endif  // V8_BUILTINS_BUILTINS_REGEXP_GEN_H_

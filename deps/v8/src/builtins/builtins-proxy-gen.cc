@@ -13,12 +13,6 @@
 namespace v8 {
 namespace internal {
 
-// ES6 section 26.2.1.1 Proxy ( target, handler ) for the [[Call]] case.
-TF_BUILTIN(ProxyConstructor, CodeStubAssembler) {
-  Node* context = Parameter(Descriptor::kContext);
-  ThrowTypeError(context, MessageTemplate::kConstructorNotFunction, "Proxy");
-}
-
 void ProxiesCodeStubAssembler::GotoIfRevokedProxy(Node* object,
                                                   Label* if_proxy_revoked) {
   Label proxy_not_revoked(this);
@@ -73,37 +67,148 @@ Node* ProxiesCodeStubAssembler::AllocateProxy(Node* target, Node* handler,
 
 Node* ProxiesCodeStubAssembler::AllocateJSArrayForCodeStubArguments(
     Node* context, CodeStubArguments& args, Node* argc, ParameterMode mode) {
+  Comment("AllocateJSArrayForCodeStubArguments");
+
+  Label if_empty_array(this), allocate_js_array(this);
+  // Do not use AllocateJSArray since {elements} might end up in LOS.
+  VARIABLE(elements, MachineRepresentation::kTagged);
+
+  TNode<Smi> length = ParameterToTagged(argc, mode);
+  GotoIf(SmiEqual(length, SmiConstant(0)), &if_empty_array);
+  {
+    Label if_large_object(this, Label::kDeferred);
+    Node* allocated_elements = AllocateFixedArray(PACKED_ELEMENTS, argc, mode,
+                                                  kAllowLargeObjectAllocation);
+    elements.Bind(allocated_elements);
+
+    VARIABLE(index, MachineType::PointerRepresentation(),
+             IntPtrConstant(FixedArrayBase::kHeaderSize - kHeapObjectTag));
+    VariableList list({&index}, zone());
+
+    GotoIf(SmiGreaterThan(length, SmiConstant(FixedArray::kMaxRegularLength)),
+           &if_large_object);
+    args.ForEach(list, [=, &index](Node* arg) {
+      StoreNoWriteBarrier(MachineRepresentation::kTagged, allocated_elements,
+                          index.value(), arg);
+      Increment(&index, kPointerSize);
+    });
+    Goto(&allocate_js_array);
+
+    BIND(&if_large_object);
+    {
+      args.ForEach(list, [=, &index](Node* arg) {
+        Store(allocated_elements, index.value(), arg);
+        Increment(&index, kPointerSize);
+      });
+      Goto(&allocate_js_array);
+    }
+  }
+
+  BIND(&if_empty_array);
+  {
+    elements.Bind(EmptyFixedArrayConstant());
+    Goto(&allocate_js_array);
+  }
+
+  BIND(&allocate_js_array);
+  // Allocate the result JSArray.
   Node* native_context = LoadNativeContext(context);
   Node* array_map = LoadJSArrayElementsMap(PACKED_ELEMENTS, native_context);
-  Node* argc_smi = ParameterToTagged(argc, mode);
+  Node* array = AllocateUninitializedJSArrayWithoutElements(array_map, length);
+  StoreObjectFieldNoWriteBarrier(array, JSObject::kElementsOffset,
+                                 elements.value());
 
-  Node* array = AllocateJSArray(PACKED_ELEMENTS, array_map, argc, argc_smi,
-                                nullptr, mode);
-  Node* elements = LoadElements(array);
-
-  VARIABLE(index, MachineType::PointerRepresentation(),
-           IntPtrConstant(FixedArrayBase::kHeaderSize - kHeapObjectTag));
-  VariableList list({&index}, zone());
-  args.ForEach(list, [=, &index](Node* arg) {
-    StoreNoWriteBarrier(MachineRepresentation::kTagged, elements, index.value(),
-                        arg);
-    Increment(&index, kPointerSize);
-  });
   return array;
 }
 
-// ES6 section 26.2.1.1 Proxy ( target, handler ) for the [[Construct]] case.
-TF_BUILTIN(ProxyConstructor_ConstructStub, ProxiesCodeStubAssembler) {
-  int const kTargetArg = 0;
-  int const kHandlerArg = 1;
+Node* ProxiesCodeStubAssembler::CreateProxyRevokeFunctionContext(
+    Node* proxy, Node* native_context) {
+  Node* const context = Allocate(FixedArray::SizeFor(kProxyContextLength));
+  StoreMapNoWriteBarrier(context, Heap::kFunctionContextMapRootIndex);
+  InitializeFunctionContext(native_context, context, kProxyContextLength);
+  StoreContextElementNoWriteBarrier(context, kProxySlot, proxy);
+  return context;
+}
 
-  Node* argc =
-      ChangeInt32ToIntPtr(Parameter(BuiltinDescriptor::kArgumentsCount));
-  CodeStubArguments args(this, argc);
+Node* ProxiesCodeStubAssembler::AllocateProxyRevokeFunction(Node* proxy,
+                                                            Node* context) {
+  Node* const native_context = LoadNativeContext(context);
 
-  Node* target = args.GetOptionalArgumentValue(kTargetArg);
-  Node* handler = args.GetOptionalArgumentValue(kHandlerArg);
-  Node* context = Parameter(BuiltinDescriptor::kContext);
+  Node* const proxy_context =
+      CreateProxyRevokeFunctionContext(proxy, native_context);
+  Node* const revoke_map = LoadContextElement(
+      native_context, Context::STRICT_FUNCTION_WITHOUT_PROTOTYPE_MAP_INDEX);
+  Node* const revoke_info =
+      LoadContextElement(native_context, Context::PROXY_REVOKE_SHARED_FUN);
+
+  return AllocateFunctionWithMapAndContext(revoke_map, revoke_info,
+                                           proxy_context);
+}
+
+// ES #sec-proxy-constructor
+TF_BUILTIN(ProxyConstructor, ProxiesCodeStubAssembler) {
+  Node* context = Parameter(Descriptor::kContext);
+
+  // 1. If NewTarget is undefined, throw a TypeError exception.
+  Node* new_target = Parameter(Descriptor::kNewTarget);
+  Label throwtypeerror(this, Label::kDeferred), createproxy(this);
+  Branch(IsUndefined(new_target), &throwtypeerror, &createproxy);
+
+  BIND(&throwtypeerror);
+  {
+    ThrowTypeError(context, MessageTemplate::kConstructorNotFunction, "Proxy");
+  }
+
+  // 2. Return ? ProxyCreate(target, handler).
+  BIND(&createproxy);
+  {
+    // https://tc39.github.io/ecma262/#sec-proxycreate
+    Node* target = Parameter(Descriptor::kTarget);
+    Node* handler = Parameter(Descriptor::kHandler);
+
+    // 1. If Type(target) is not Object, throw a TypeError exception.
+    // 2. If target is a Proxy exotic object and target.[[ProxyHandler]] is
+    //    null, throw a TypeError exception.
+    // 3. If Type(handler) is not Object, throw a TypeError exception.
+    // 4. If handler is a Proxy exotic object and handler.[[ProxyHandler]]
+    //    is null, throw a TypeError exception.
+    Label throw_proxy_non_object(this, Label::kDeferred),
+        throw_proxy_handler_or_target_revoked(this, Label::kDeferred),
+        return_create_proxy(this);
+
+    GotoIf(TaggedIsSmi(target), &throw_proxy_non_object);
+    GotoIfNot(IsJSReceiver(target), &throw_proxy_non_object);
+    GotoIfRevokedProxy(target, &throw_proxy_handler_or_target_revoked);
+
+    GotoIf(TaggedIsSmi(handler), &throw_proxy_non_object);
+    GotoIfNot(IsJSReceiver(handler), &throw_proxy_non_object);
+    GotoIfRevokedProxy(handler, &throw_proxy_handler_or_target_revoked);
+
+    // 5. Let P be a newly created object.
+    // 6. Set P's essential internal methods (except for [[Call]] and
+    //    [[Construct]]) to the definitions specified in 9.5.
+    // 7. If IsCallable(target) is true, then
+    //    a. Set P.[[Call]] as specified in 9.5.12.
+    //    b. If IsConstructor(target) is true, then
+    //       1. Set P.[[Construct]] as specified in 9.5.13.
+    // 8. Set P.[[ProxyTarget]] to target.
+    // 9. Set P.[[ProxyHandler]] to handler.
+    // 10. Return P.
+    Return(AllocateProxy(target, handler, context));
+
+    BIND(&throw_proxy_non_object);
+    ThrowTypeError(context, MessageTemplate::kProxyNonObject);
+
+    BIND(&throw_proxy_handler_or_target_revoked);
+    ThrowTypeError(context, MessageTemplate::kProxyHandlerOrTargetRevoked);
+  }
+}
+
+TF_BUILTIN(ProxyRevocable, ProxiesCodeStubAssembler) {
+  Node* const target = Parameter(Descriptor::kTarget);
+  Node* const handler = Parameter(Descriptor::kHandler);
+  Node* const context = Parameter(Descriptor::kContext);
+  Node* const native_context = LoadNativeContext(context);
 
   Label throw_proxy_non_object(this, Label::kDeferred),
       throw_proxy_handler_or_target_revoked(this, Label::kDeferred),
@@ -117,13 +222,62 @@ TF_BUILTIN(ProxyConstructor_ConstructStub, ProxiesCodeStubAssembler) {
   GotoIfNot(IsJSReceiver(handler), &throw_proxy_non_object);
   GotoIfRevokedProxy(handler, &throw_proxy_handler_or_target_revoked);
 
-  args.PopAndReturn(AllocateProxy(target, handler, context));
+  Node* const proxy = AllocateProxy(target, handler, context);
+  Node* const revoke = AllocateProxyRevokeFunction(proxy, context);
+
+  Node* const result = Allocate(JSProxyRevocableResult::kSize);
+  Node* const result_map = LoadContextElement(
+      native_context, Context::PROXY_REVOCABLE_RESULT_MAP_INDEX);
+  StoreMapNoWriteBarrier(result, result_map);
+  StoreObjectFieldRoot(result, JSProxyRevocableResult::kPropertiesOrHashOffset,
+                       Heap::kEmptyFixedArrayRootIndex);
+  StoreObjectFieldRoot(result, JSProxyRevocableResult::kElementsOffset,
+                       Heap::kEmptyFixedArrayRootIndex);
+  StoreObjectFieldNoWriteBarrier(result, JSProxyRevocableResult::kProxyOffset,
+                                 proxy);
+  StoreObjectFieldNoWriteBarrier(result, JSProxyRevocableResult::kRevokeOffset,
+                                 revoke);
+  Return(result);
 
   BIND(&throw_proxy_non_object);
   ThrowTypeError(context, MessageTemplate::kProxyNonObject);
 
   BIND(&throw_proxy_handler_or_target_revoked);
   ThrowTypeError(context, MessageTemplate::kProxyHandlerOrTargetRevoked);
+}
+
+// Proxy Revocation Functions
+// https://tc39.github.io/ecma262/#sec-proxy-revocation-functions
+TF_BUILTIN(ProxyRevoke, ProxiesCodeStubAssembler) {
+  Node* const context = Parameter(Descriptor::kContext);
+
+  // 1. Let p be F.[[RevocableProxy]].
+  Node* const proxy_slot = IntPtrConstant(kProxySlot);
+  Node* const proxy = LoadContextElement(context, proxy_slot);
+
+  Label revoke_called(this);
+
+  // 2. If p is null, ...
+  GotoIf(IsNull(proxy), &revoke_called);
+
+  // 3. Set F.[[RevocableProxy]] to null.
+  StoreContextElement(context, proxy_slot, NullConstant());
+
+  // 4. Assert: p is a Proxy object.
+  CSA_ASSERT(this, IsJSProxy(proxy));
+
+  // 5. Set p.[[ProxyTarget]] to null.
+  StoreObjectField(proxy, JSProxy::kTargetOffset, NullConstant());
+
+  // 6. Set p.[[ProxyHandler]] to null.
+  StoreObjectField(proxy, JSProxy::kHandlerOffset, NullConstant());
+
+  // 7. Return undefined.
+  Return(UndefinedConstant());
+
+  BIND(&revoke_called);
+  // 2. ... return undefined.
+  Return(UndefinedConstant());
 }
 
 TF_BUILTIN(CallProxy, ProxiesCodeStubAssembler) {
@@ -304,8 +458,7 @@ TF_BUILTIN(ProxyHasProperty, ProxiesCodeStubAssembler) {
   BIND(&trap_undefined);
   {
     // 7.a. Return ? target.[[HasProperty]](P).
-    TailCallStub(Builtins::CallableFor(isolate(), Builtins::kHasProperty),
-                 context, name, target);
+    TailCallBuiltin(Builtins::kHasProperty, context, name, target);
   }
 
   BIND(&return_false);

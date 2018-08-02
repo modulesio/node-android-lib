@@ -24,7 +24,7 @@ const cipherlist = {
 };
 
 function test(size, type, name, next) {
-  const cipher = type ? cipherlist[type] : cipherlist['NOT_PFS'];
+  const cipher = type ? cipherlist[type] : cipherlist.NOT_PFS;
 
   if (name) tls.DEFAULT_ECDH_CURVE = name;
 
@@ -82,7 +82,12 @@ function testECDHE256() {
 }
 
 function testECDHE512() {
-  test(521, 'ECDH', 'secp521r1', null);
+  test(521, 'ECDH', 'secp521r1', testX25519);
+  ntests++;
+}
+
+function testX25519() {
+  test(253, 'ECDH', 'X25519', null);
   ntests++;
 }
 
@@ -90,5 +95,5 @@ testNOT_PFS();
 
 process.on('exit', function() {
   assert.strictEqual(ntests, nsuccess);
-  assert.strictEqual(ntests, 5);
+  assert.strictEqual(ntests, 6);
 });
