@@ -208,7 +208,7 @@
                   [ 'arm_version==7 or arm_version=="default"', {
                     'conditions': [
                       [ 'arm_fpu!="default"', {
-                        'cflags': ['-mfpu=<(arm_fpu)',],
+                       # 'cflags': ['-mfpu=<(arm_fpu)',],
                       }],
                     ],
                   }],
@@ -219,7 +219,7 @@
                     'cflags': ['-mthumb',],
                   }],
                   [ 'arm_thumb==0', {
-                    'cflags': ['-marm',],
+                    # 'cflags': ['-marm',],
                   }],
                 ],
               }, {
@@ -251,7 +251,7 @@
                   [ 'arm_version==7 or arm_version=="default"', {
                     'conditions': [
                       [ 'arm_fpu!="default"', {
-                        'cflags': ['-mfpu=<(arm_fpu)',],
+                        # 'cflags': ['-mfpu=<(arm_fpu)',],
                       }],
                     ],
                   }],
@@ -262,7 +262,7 @@
                     'cflags': ['-mthumb',],
                   }],
                   [ 'arm_thumb==0', {
-                    'cflags': ['-marm',],
+                    # 'cflags': ['-marm',],
                   }],
                 ],
               }, {

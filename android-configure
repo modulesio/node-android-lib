@@ -9,11 +9,11 @@
 # 'npm config set arch=<arch>'
 
 
- if [ -z "$2" ]; then
+if [ -z "$1" ]; then
     ARCH=arm64
- else
-    ARCH="$2"
- fi
+else
+    ARCH="$1"
+fi
 
 CC_VER="4.9"
 case $ARCH in
@@ -22,20 +22,36 @@ case $ARCH in
         SUFFIX="aarch64-linux-android"
         TOOLCHAIN_NAME="$SUFFIX"
         ;;
+
+    arm)
+        DEST_CPU="$ARCH"
+        SUFFIX="$ARCH-linux-androideabi"
+        TOOLCHAIN_NAME="$SUFFIX"
+        ;;
+    x86)
+        DEST_CPU="ia32"
+        SUFFIX="i686-linux-android"
+        TOOLCHAIN_NAME="$ARCH"
+        ;;
+    x86_64)
+        DEST_CPU="ia32"
+        SUFFIX="$ARCH-linux-android"
+        TOOLCHAIN_NAME="$ARCH"
+        ;;
     *)
         echo "Unsupported architecture provided: $ARCH"
         exit 1
         ;;
 esac
 
-NDK_PATH=$1
+NDK_PATH=$ANDROID_NDK
 function make_toolchain {
     $NDK_PATH/build/tools/make-standalone-toolchain.sh \
          --toolchain=$TOOLCHAIN_NAME-$CC_VER \
-        --arch=arm64 \
+        --arch=$ARCH \
         --install-dir=$TOOLCHAIN \
-	--stl=libc++ \
-        --platform=android-23
+        --platform=android-27 \
+	# --stl=libc++
 }
 
 export TOOLCHAIN=$PWD/android-toolchain
@@ -63,11 +79,11 @@ export GYP_DEFINES
 
 if [ -f "configure" ]; then
     ./configure \
-	--cross-compiling \
         --dest-cpu=$DEST_CPU \
         --dest-os=android \
+	--shared \
+        --cross-compiling \
         --without-snapshot \
-	--without-intl \
-        --openssl-no-asm \
-	--shared
+        --without-intl \
+        --openssl-no-asm 
 fi

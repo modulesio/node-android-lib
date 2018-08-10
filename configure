@@ -1036,9 +1036,10 @@ def configure_node(o):
   elif sys.platform.startswith('aix'):
     shlib_suffix = '%s.a'
   else:
-    shlib_suffix = 'so.%s'
+    shlib_suffix = 'so'
+    # shlib_suffix = 'so.%s'
 
-  shlib_suffix %= node_module_version
+  # shlib_suffix %= node_module_version
   o['variables']['node_module_version'] = int(node_module_version)
   o['variables']['shlib_suffix'] = shlib_suffix
 

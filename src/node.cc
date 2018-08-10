@@ -3893,6 +3893,8 @@ NodeService::NodeService(int argc, char** argv, void (*initEnv)(NodeService *ser
   // Part 2
   Isolate::CreateParams params;
   ArrayBufferAllocator *allocator = new ArrayBufferAllocator();
+  //std::unique_ptr<ArrayBufferAllocator, decltype(&FreeArrayBufferAllocator)>
+ // allocator(CreateArrayBufferAllocator(), &FreeArrayBufferAllocator);
   params.array_buffer_allocator = allocator;
 #ifdef NODE_ENABLE_VTUNE_PROFILING
   params.code_event_handler = vTune::GetVtuneCodeEventHandler();
@@ -3918,13 +3920,22 @@ NodeService::NodeService(int argc, char** argv, void (*initEnv)(NodeService *ser
     Locker locker(isolate);
     Isolate::Scope isolate_scope(isolate);
     HandleScope handle_scope(isolate);
+
+/*
     std::unique_ptr<IsolateData, decltype(&FreeIsolateData)> isolate_data(
 	CreateIsolateData(
 		isolate,
 		event_loop,
 		v8_platform.Platform(),
-		allocator.get()),
+		allocator->zero_fill_field()),
 	&FreeIsolateData);
+*/
+    IsolateData *isolate_data = new IsolateData(
+        isolate,
+        event_loop,
+        v8_platform.Platform(),
+        allocator->zero_fill_field());
+
     if (track_heap_objects) {
       isolate->GetHeapProfiler()->StartTrackingHeapObjects(true);
     }
@@ -3937,9 +3948,9 @@ NodeService::NodeService(int argc, char** argv, void (*initEnv)(NodeService *ser
       Local<Context> localContext = NewContext(isolate);
       context.Set(isolate, localContext);
       Context::Scope context_scope(localContext);
-      env = new Environment(isolate_data, localContext);
-      auto env = new Environment(isolate_data, context,
-                          v8_platform.GetTracingAgent());
+//      env = new Environment(isolate_data, localContext);
+      env = new Environment(isolate_data, localContext, v8_platform.GetTracingAgent());
+
       env->Start(argc, argv, exec_argc, exec_argv, v8_is_profiling);
 
       const char* path = argc > 1 ? argv[1] : nullptr;
@@ -3968,7 +3979,7 @@ NodeService::NodeService(int argc, char** argv, void (*initEnv)(NodeService *ser
         SealHandleScope seal(isolate);
         bool more;
 	// might be wrong
-        env.performance_state()->Mark(
+        env->performance_state()->Mark(
 	        node::performance::NODE_PERFORMANCE_MILESTONE_LOOP_START);
 	// might be wrong
        // PERFORMANCE_MARK(env, LOOP_START);
@@ -3986,7 +3997,7 @@ NodeService::~NodeService() {
 
   {
     SealHandleScope seal(isolate);
-    env.performance_state()->Mark(
+    env->performance_state()->Mark(
         node::performance::NODE_PERFORMANCE_MILESTONE_LOOP_EXIT);
     //PERFORMANCE_MARK(env, LOOP_EXIT);
   }
@@ -4123,7 +4134,7 @@ void RegisterBuiltinModules() {
 #undef V
 }
 
-}  // namespace node
+
 
 #if !HAVE_INSPECTOR
 void Initialize() {}
