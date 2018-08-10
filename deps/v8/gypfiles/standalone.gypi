@@ -1191,8 +1191,8 @@
               ['target_arch=="arm" and arm_version==7', {
                 'cflags': [
                   '-march=armv7-a',
-                  '-mtune=cortex-a8',
-                  '-mfpu=vfp3',
+                  # '-mtune=cortex-a8',
+                  # '-mfpu=vfp3',
                 ],
                 'ldflags': [
                   '-L<(android_libcpp_libs)/armeabi-v7a',

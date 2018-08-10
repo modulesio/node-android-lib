@@ -39,7 +39,7 @@ int64_t charactersToInteger(const UChar* characters, size_t length,
 
   char* endptr;
   int64_t result =
-      static_cast<int64_t>(std::strtoll(buffer.data(), &endptr, 10));
+      static_cast<int64_t>(strtoll(buffer.data(), &endptr, 10));
   if (ok) *ok = !(*endptr);
   return result;
 }

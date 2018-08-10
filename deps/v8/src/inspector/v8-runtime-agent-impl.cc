@@ -613,7 +613,7 @@ Response V8RuntimeAgentImpl::globalLexicalScopeNames(
 
 Response V8RuntimeAgentImpl::getIsolateId(String16* outIsolateId) {
   char buf[40];
-  std::snprintf(buf, sizeof(buf), "%" PRIx64, m_inspector->isolateId());
+  snprintf(buf, sizeof(buf), "%" PRIx64, m_inspector->isolateId());
   *outIsolateId = buf;
   return Response::OK();
 }

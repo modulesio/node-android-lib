@@ -445,7 +445,7 @@
       'defines': [
         'U_COMMON_IMPLEMENTATION=1',
       ],
-      'cflags_c': ['-std=c99'],
+      'cflags_c': ['-std=c++0x'],
       'export_dependent_settings': [ 'icu_uconfig', 'icu_uconfig_target' ],
       'direct_dependent_settings': {
         'include_dirs': [
@@ -490,7 +490,7 @@
         'U_TOOLUTIL_IMPLEMENTATION=1',
         #'DEBUG=0', # http://bugs.icu-project.org/trac/ticket/10977
       ],
-      'cflags_c': ['-std=c99'],
+      'cflags_c': ['-std=c++0x'],
       'conditions': [
         ['OS == "solaris"', {
           'defines': [ '_XOPEN_SOURCE_EXTENDED=0' ]
